@@ -16,32 +16,47 @@ import (
 
 // Common service errors.
 var (
-	ErrInvalidRequest     = errors.New("invalid request")
-	ErrOrderNotFound      = errors.New("order not found")
-	ErrInvalidTransition  = errors.New("invalid status transition")
+	ErrInvalidRequest        = errors.New("invalid request")
+	ErrOrderNotFound         = errors.New("order not found")
+	ErrInvalidTransition     = errors.New("invalid status transition")
 	ErrDriverAlreadyAssigned = errors.New("driver already assigned")
+	ErrNoDriverAssigned      = errors.New("no driver assigned to this order")
 )
 
 // OrderService defines the interface for ride order business logic.
 // This interface is used for dependency injection in handlers and can be mocked in tests.
 type OrderService interface {
 	// CreateOrder creates a new ride order, estimating fare and publishing ride.created event.
+	// Also publishes wallet.lock event to authorize (lock) user's wallet balance.
 	CreateOrder(ctx context.Context, req *model.CreateRideOrderRequest) (*model.RideOrder, error)
 
 	// GetOrder retrieves a ride order by its ID.
 	GetOrder(ctx context.Context, id string) (*model.RideOrder, error)
 
 	// AssignDriver assigns a driver to a pending ride order and publishes ride.assigned event.
+	// Flow: PENDING → ASSIGNED (driver accepts the offer from matching-service)
 	AssignDriver(ctx context.Context, orderID, driverID string) (*model.RideOrder, error)
 
-	// StartRide transitions an assigned ride to started status and publishes ride.started event.
-	StartRide(ctx context.Context, orderID string) (*model.RideOrder, error)
+	// PickingUp sets status to PICKING_UP when driver is heading to pickup location.
+	// Flow: ASSIGNED → PICKING_UP
+	PickingUp(ctx context.Context, orderID string) (*model.RideOrder, error)
 
-	// CompleteRide transitions a started ride to completed status and publishes ride.completed event.
+	// OnTheWay sets status to ON_THE_WAY when passenger is picked up and ride starts.
+	// Flow: PICKING_UP → ON_THE_WAY
+	OnTheWay(ctx context.Context, orderID string) (*model.RideOrder, error)
+
+	// CompleteRide transitions an ON_THE_WAY ride to completed status.
+	// Also publishes payment.capture and ride.completed events.
+	// Flow: ON_THE_WAY → COMPLETED
 	CompleteRide(ctx context.Context, orderID string) (*model.RideOrder, error)
 
-	// CancelRide cancels a pending or assigned ride order.
-	CancelRide(ctx context.Context, orderID string) (*model.RideOrder, error)
+	// CancelRide cancels a ride order (by user).
+	// Publishes ride.cancelled and wallet.unlock events.
+	CancelRide(ctx context.Context, orderID string, req *model.CancelRideRequest) (*model.RideOrder, error)
+
+	// DriverCancelRide handles driver cancellation - resets order to PENDING for re-matching.
+	// Publishes ride.driver_cancelled event so matching-service can find a new driver.
+	DriverCancelRide(ctx context.Context, orderID string) (*model.RideOrder, error)
 
 	// GetUserOrders retrieves all ride orders for a specific user with pagination.
 	GetUserOrders(ctx context.Context, userID string, limit, offset int) ([]*model.RideOrder, int, error)
@@ -62,6 +77,7 @@ func NewOrderService(repo repository.OrderRepository, publisher event.Publisher)
 }
 
 // CreateOrder creates a new ride order.
+// Step in flowchart: User konfirmasi order → Ride Order Service → Payment Service (wallet lock)
 func (s *orderServiceImpl) CreateOrder(ctx context.Context, req *model.CreateRideOrderRequest) (*model.RideOrder, error) {
 	// Validate request
 	if req == nil {
@@ -87,6 +103,7 @@ func (s *orderServiceImpl) CreateOrder(ctx context.Context, req *model.CreateRid
 		PickupLocation:    req.PickupLocation,
 		DropoffLocation:   req.DropoffLocation,
 		Status:            model.RideStatusPending,
+		PaymentStatus:     model.PaymentStatusNone,
 		Fare:              fare,
 		Distance:          distance,
 		EstimatedDuration: duration,
@@ -99,7 +116,7 @@ func (s *orderServiceImpl) CreateOrder(ctx context.Context, req *model.CreateRid
 		return nil, err
 	}
 
-	// Publish ride.created event
+	// Publish ride.created event → triggers matching-service to find driver
 	evt, err := event.NewEvent(event.TopicRideCreated, "ride-order-service", model.RideCreatedEvent{
 		OrderID:         order.ID,
 		UserID:          order.UserID,
@@ -109,6 +126,16 @@ func (s *orderServiceImpl) CreateOrder(ctx context.Context, req *model.CreateRid
 	})
 	if err == nil && s.publisher != nil {
 		_ = s.publisher.Publish(ctx, event.TopicRideCreated, evt)
+	}
+
+	// Publish wallet.lock event → payment-service locks user's wallet balance
+	walletEvt, err := event.NewEvent(event.TopicWalletLock, "ride-order-service", map[string]interface{}{
+		"order_id": order.ID,
+		"user_id":  order.UserID,
+		"amount":   order.Fare,
+	})
+	if err == nil && s.publisher != nil {
+		_ = s.publisher.Publish(ctx, event.TopicWalletLock, walletEvt)
 	}
 
 	return order, nil
@@ -132,6 +159,7 @@ func (s *orderServiceImpl) GetOrder(ctx context.Context, id string) (*model.Ride
 }
 
 // AssignDriver assigns a driver to a pending ride order.
+// Flowchart: Driver Accept → status ASSIGNED
 func (s *orderServiceImpl) AssignDriver(ctx context.Context, orderID, driverID string) (*model.RideOrder, error) {
 	if orderID == "" || driverID == "" {
 		return nil, ErrInvalidRequest
@@ -159,6 +187,7 @@ func (s *orderServiceImpl) AssignDriver(ctx context.Context, orderID, driverID s
 	// Update order
 	order.DriverID = driverID
 	order.Status = model.RideStatusAssigned
+	order.PaymentStatus = model.PaymentStatusAuthorized // wallet locked
 	order.UpdatedAt = time.Now().UTC()
 
 	if err := s.repo.Update(ctx, order); err != nil {
@@ -178,8 +207,9 @@ func (s *orderServiceImpl) AssignDriver(ctx context.Context, orderID, driverID s
 	return order, nil
 }
 
-// StartRide transitions an assigned ride to started status.
-func (s *orderServiceImpl) StartRide(ctx context.Context, orderID string) (*model.RideOrder, error) {
+// PickingUp sets status to PICKING_UP when driver heads to pickup.
+// Flowchart: ASSIGNED → PICKING_UP (driver menuju lokasi jemput)
+func (s *orderServiceImpl) PickingUp(ctx context.Context, orderID string) (*model.RideOrder, error) {
 	if orderID == "" {
 		return nil, ErrInvalidRequest
 	}
@@ -192,32 +222,73 @@ func (s *orderServiceImpl) StartRide(ctx context.Context, orderID string) (*mode
 		return nil, err
 	}
 
-	// Validate transition: only ASSIGNED -> STARTED
-	if !order.Status.CanTransitionTo(model.RideStatusStarted) {
+	// Validate transition: ASSIGNED → PICKING_UP
+	if !order.Status.CanTransitionTo(model.RideStatusPickingUp) {
 		return nil, ErrInvalidTransition
 	}
 
-	order.Status = model.RideStatusStarted
+	order.Status = model.RideStatusPickingUp
 	order.UpdatedAt = time.Now().UTC()
 
 	if err := s.repo.Update(ctx, order); err != nil {
 		return nil, err
 	}
 
-	// Publish ride.started event
-	evt, err := event.NewEvent(event.TopicRideStarted, "ride-order-service", model.RideStartedEvent{
+	// Publish ride.picking_up event → location-service starts tracking
+	evt, err := event.NewEvent(event.TopicRidePickingUp, "ride-order-service", model.RidePickingUpEvent{
 		OrderID:  order.ID,
 		DriverID: order.DriverID,
 		UserID:   order.UserID,
 	})
 	if err == nil && s.publisher != nil {
-		_ = s.publisher.Publish(ctx, event.TopicRideStarted, evt)
+		_ = s.publisher.Publish(ctx, event.TopicRidePickingUp, evt)
 	}
 
 	return order, nil
 }
 
-// CompleteRide transitions a started ride to completed status.
+// OnTheWay sets status to ON_THE_WAY when passenger is picked up.
+// Flowchart: PICKING_UP → ON_THE_WAY (penumpang sudah dijemput, perjalanan dimulai)
+func (s *orderServiceImpl) OnTheWay(ctx context.Context, orderID string) (*model.RideOrder, error) {
+	if orderID == "" {
+		return nil, ErrInvalidRequest
+	}
+
+	order, err := s.repo.GetByID(ctx, orderID)
+	if err != nil {
+		if errors.Is(err, repository.ErrOrderNotFound) {
+			return nil, ErrOrderNotFound
+		}
+		return nil, err
+	}
+
+	// Validate transition: PICKING_UP → ON_THE_WAY
+	if !order.Status.CanTransitionTo(model.RideStatusOnTheWay) {
+		return nil, ErrInvalidTransition
+	}
+
+	order.Status = model.RideStatusOnTheWay
+	order.UpdatedAt = time.Now().UTC()
+
+	if err := s.repo.Update(ctx, order); err != nil {
+		return nil, err
+	}
+
+	// Publish ride.on_the_way event → location-service continues tracking
+	evt, err := event.NewEvent(event.TopicRideOnTheWay, "ride-order-service", model.RideOnTheWayEvent{
+		OrderID:  order.ID,
+		DriverID: order.DriverID,
+		UserID:   order.UserID,
+	})
+	if err == nil && s.publisher != nil {
+		_ = s.publisher.Publish(ctx, event.TopicRideOnTheWay, evt)
+	}
+
+	return order, nil
+}
+
+// CompleteRide transitions an ON_THE_WAY ride to completed status.
+// Flowchart: ON_THE_WAY → COMPLETED → Payment Capture → Wallet Deduct → Settlement
 func (s *orderServiceImpl) CompleteRide(ctx context.Context, orderID string) (*model.RideOrder, error) {
 	if orderID == "" {
 		return nil, ErrInvalidRequest
@@ -231,19 +302,20 @@ func (s *orderServiceImpl) CompleteRide(ctx context.Context, orderID string) (*m
 		return nil, err
 	}
 
-	// Validate transition: only STARTED -> COMPLETED
+	// Validate transition: only ON_THE_WAY -> COMPLETED
 	if !order.Status.CanTransitionTo(model.RideStatusCompleted) {
 		return nil, ErrInvalidTransition
 	}
 
 	order.Status = model.RideStatusCompleted
+	order.PaymentStatus = model.PaymentStatusCaptured
 	order.UpdatedAt = time.Now().UTC()
 
 	if err := s.repo.Update(ctx, order); err != nil {
 		return nil, err
 	}
 
-	// Publish ride.completed event
+	// Publish ride.completed event → triggers rating-service, review-service, audit-log
 	evt, err := event.NewEvent(event.TopicRideCompleted, "ride-order-service", model.RideCompletedEvent{
 		OrderID:  order.ID,
 		DriverID: order.DriverID,
@@ -255,11 +327,23 @@ func (s *orderServiceImpl) CompleteRide(ctx context.Context, orderID string) (*m
 		_ = s.publisher.Publish(ctx, event.TopicRideCompleted, evt)
 	}
 
+	// Publish payment.captured event → payment-service captures payment
+	captureEvt, err := event.NewEvent(event.TopicPaymentCaptured, "ride-order-service", map[string]interface{}{
+		"order_id":  order.ID,
+		"user_id":   order.UserID,
+		"driver_id": order.DriverID,
+		"amount":    order.Fare,
+	})
+	if err == nil && s.publisher != nil {
+		_ = s.publisher.Publish(ctx, event.TopicPaymentCaptured, captureEvt)
+	}
+
 	return order, nil
 }
 
-// CancelRide cancels a pending or assigned ride order.
-func (s *orderServiceImpl) CancelRide(ctx context.Context, orderID string) (*model.RideOrder, error) {
+// CancelRide cancels a ride order (user cancel).
+// Flowchart: User Cancel → Cancel Order → Wallet Unlock
+func (s *orderServiceImpl) CancelRide(ctx context.Context, orderID string, req *model.CancelRideRequest) (*model.RideOrder, error) {
 	if orderID == "" {
 		return nil, ErrInvalidRequest
 	}
@@ -272,16 +356,98 @@ func (s *orderServiceImpl) CancelRide(ctx context.Context, orderID string) (*mod
 		return nil, err
 	}
 
-	// Validate transition: only PENDING/ASSIGNED -> CANCELLED
+	// Validate transition: PENDING/ASSIGNED/PICKING_UP → CANCELLED
 	if !order.Status.CanTransitionTo(model.RideStatusCancelled) {
 		return nil, ErrInvalidTransition
 	}
 
 	order.Status = model.RideStatusCancelled
+	order.PaymentStatus = model.PaymentStatusRefunded
+	if req != nil {
+		order.CancelledBy = req.CancelledBy
+		order.CancelReason = req.CancelReason
+	} else {
+		order.CancelledBy = "user"
+	}
 	order.UpdatedAt = time.Now().UTC()
 
 	if err := s.repo.Update(ctx, order); err != nil {
 		return nil, err
+	}
+
+	// Publish ride.cancelled event
+	evt, err := event.NewEvent(event.TopicRideCancelled, "ride-order-service", model.RideCancelledEvent{
+		OrderID:     order.ID,
+		UserID:      order.UserID,
+		DriverID:    order.DriverID,
+		CancelledBy: order.CancelledBy,
+		Reason:      order.CancelReason,
+	})
+	if err == nil && s.publisher != nil {
+		_ = s.publisher.Publish(ctx, event.TopicRideCancelled, evt)
+	}
+
+	// Publish wallet.unlock event → refund locked balance
+	unlockEvt, err := event.NewEvent(event.TopicWalletUnlock, "ride-order-service", map[string]interface{}{
+		"order_id": order.ID,
+		"user_id":  order.UserID,
+		"amount":   order.Fare,
+	})
+	if err == nil && s.publisher != nil {
+		_ = s.publisher.Publish(ctx, event.TopicWalletUnlock, unlockEvt)
+	}
+
+	return order, nil
+}
+
+// DriverCancelRide handles driver cancellation with re-matching.
+// Flowchart: Driver Cancel → Re-Match Driver → back to Matching Service
+func (s *orderServiceImpl) DriverCancelRide(ctx context.Context, orderID string) (*model.RideOrder, error) {
+	if orderID == "" {
+		return nil, ErrInvalidRequest
+	}
+
+	order, err := s.repo.GetByID(ctx, orderID)
+	if err != nil {
+		if errors.Is(err, repository.ErrOrderNotFound) {
+			return nil, ErrOrderNotFound
+		}
+		return nil, err
+	}
+
+	// Driver can only cancel if ASSIGNED or PICKING_UP
+	if order.Status != model.RideStatusAssigned && order.Status != model.RideStatusPickingUp {
+		return nil, ErrInvalidTransition
+	}
+
+	if order.DriverID == "" {
+		return nil, ErrNoDriverAssigned
+	}
+
+	// Save previous driver for the event
+	previousDriverID := order.DriverID
+
+	// Reset to PENDING for re-matching (remove driver, keep wallet locked)
+	order.Status = model.RideStatusPending
+	order.DriverID = ""
+	order.PaymentStatus = model.PaymentStatusAuthorized // keep wallet locked
+	order.UpdatedAt = time.Now().UTC()
+
+	if err := s.repo.Update(ctx, order); err != nil {
+		return nil, err
+	}
+
+	// Publish ride.driver_cancelled → matching-service will find new driver
+	evt, err := event.NewEvent(event.TopicRideDriverCancelled, "ride-order-service", model.RideDriverCancelledEvent{
+		OrderID:          order.ID,
+		UserID:           order.UserID,
+		PreviousDriverID: previousDriverID,
+		PickupLocation:   order.PickupLocation,
+		DropoffLocation:  order.DropoffLocation,
+		EstimatedFare:    order.Fare,
+	})
+	if err == nil && s.publisher != nil {
+		_ = s.publisher.Publish(ctx, event.TopicRideDriverCancelled, evt)
 	}
 
 	return order, nil

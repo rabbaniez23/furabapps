@@ -26,18 +26,21 @@ func NewOrderHandler(svc service.OrderService) *OrderHandler {
 // RegisterRoutes registers all ride order routes on the given chi router.
 func (h *OrderHandler) RegisterRoutes(r chi.Router) {
 	r.Route("/api/v1/rides", func(r chi.Router) {
-		r.Post("/", h.CreateOrder)           // POST /api/v1/rides
-		r.Get("/{orderID}", h.GetOrder)      // GET  /api/v1/rides/{orderID}
-		r.Put("/{orderID}/assign", h.AssignDriver)  // PUT  /api/v1/rides/{orderID}/assign
-		r.Put("/{orderID}/start", h.StartRide)      // PUT  /api/v1/rides/{orderID}/start
-		r.Put("/{orderID}/complete", h.CompleteRide) // PUT  /api/v1/rides/{orderID}/complete
-		r.Put("/{orderID}/cancel", h.CancelRide)     // PUT  /api/v1/rides/{orderID}/cancel
-		r.Get("/user/{userID}", h.GetUserOrders)     // GET  /api/v1/rides/user/{userID}
+		r.Post("/", h.CreateOrder)                              // POST /api/v1/rides
+		r.Get("/{orderID}", h.GetOrder)                         // GET  /api/v1/rides/{orderID}
+		r.Put("/{orderID}/assign", h.AssignDriver)              // PUT  /api/v1/rides/{orderID}/assign
+		r.Put("/{orderID}/picking-up", h.PickingUp)             // PUT  /api/v1/rides/{orderID}/picking-up
+		r.Put("/{orderID}/on-the-way", h.OnTheWay)              // PUT  /api/v1/rides/{orderID}/on-the-way
+		r.Put("/{orderID}/complete", h.CompleteRide)             // PUT  /api/v1/rides/{orderID}/complete
+		r.Put("/{orderID}/cancel", h.CancelRide)                // PUT  /api/v1/rides/{orderID}/cancel
+		r.Put("/{orderID}/driver-cancel", h.DriverCancelRide)   // PUT  /api/v1/rides/{orderID}/driver-cancel
+		r.Get("/user/{userID}", h.GetUserOrders)                // GET  /api/v1/rides/user/{userID}
 	})
 }
 
 // CreateOrder handles POST /api/v1/rides
 // Creates a new ride order with pickup and dropoff locations.
+// Also triggers wallet.lock event to reserve user's balance.
 func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 	var req model.CreateRideOrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -88,7 +91,7 @@ func (h *OrderHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 // AssignDriver handles PUT /api/v1/rides/{orderID}/assign
-// Assigns a driver to a pending ride order.
+// Assigns a driver to a pending ride order (driver accepted the offer).
 func (h *OrderHandler) AssignDriver(w http.ResponseWriter, r *http.Request) {
 	orderID := chi.URLParam(r, "orderID")
 	if orderID == "" {
@@ -109,49 +112,51 @@ func (h *OrderHandler) AssignDriver(w http.ResponseWriter, r *http.Request) {
 
 	order, err := h.service.AssignDriver(r.Context(), orderID, req.DriverID)
 	if err != nil {
-		switch err {
-		case service.ErrOrderNotFound:
-			utils.ErrorResponse(w, http.StatusNotFound, "order not found")
-		case service.ErrInvalidTransition:
-			utils.ErrorResponse(w, http.StatusConflict, "cannot assign driver to order with current status")
-		case service.ErrDriverAlreadyAssigned:
-			utils.ErrorResponse(w, http.StatusConflict, "driver already assigned to this order")
-		default:
-			utils.ErrorResponse(w, http.StatusInternalServerError, "failed to assign driver")
-		}
+		handleServiceError(w, err)
 		return
 	}
 
 	utils.SuccessMessageResponse(w, http.StatusOK, "driver assigned successfully", order)
 }
 
-// StartRide handles PUT /api/v1/rides/{orderID}/start
-// Starts an assigned ride.
-func (h *OrderHandler) StartRide(w http.ResponseWriter, r *http.Request) {
+// PickingUp handles PUT /api/v1/rides/{orderID}/picking-up
+// Driver is heading to pickup location.
+func (h *OrderHandler) PickingUp(w http.ResponseWriter, r *http.Request) {
 	orderID := chi.URLParam(r, "orderID")
 	if orderID == "" {
 		utils.ErrorResponse(w, http.StatusBadRequest, "order ID is required")
 		return
 	}
 
-	order, err := h.service.StartRide(r.Context(), orderID)
+	order, err := h.service.PickingUp(r.Context(), orderID)
 	if err != nil {
-		switch err {
-		case service.ErrOrderNotFound:
-			utils.ErrorResponse(w, http.StatusNotFound, "order not found")
-		case service.ErrInvalidTransition:
-			utils.ErrorResponse(w, http.StatusConflict, "cannot start ride with current status")
-		default:
-			utils.ErrorResponse(w, http.StatusInternalServerError, "failed to start ride")
-		}
+		handleServiceError(w, err)
 		return
 	}
 
-	utils.SuccessMessageResponse(w, http.StatusOK, "ride started successfully", order)
+	utils.SuccessMessageResponse(w, http.StatusOK, "driver is picking up", order)
+}
+
+// OnTheWay handles PUT /api/v1/rides/{orderID}/on-the-way
+// Passenger has been picked up, ride is in progress.
+func (h *OrderHandler) OnTheWay(w http.ResponseWriter, r *http.Request) {
+	orderID := chi.URLParam(r, "orderID")
+	if orderID == "" {
+		utils.ErrorResponse(w, http.StatusBadRequest, "order ID is required")
+		return
+	}
+
+	order, err := h.service.OnTheWay(r.Context(), orderID)
+	if err != nil {
+		handleServiceError(w, err)
+		return
+	}
+
+	utils.SuccessMessageResponse(w, http.StatusOK, "ride is on the way", order)
 }
 
 // CompleteRide handles PUT /api/v1/rides/{orderID}/complete
-// Completes a started ride.
+// Completes the ride. Triggers payment capture and settlement.
 func (h *OrderHandler) CompleteRide(w http.ResponseWriter, r *http.Request) {
 	orderID := chi.URLParam(r, "orderID")
 	if orderID == "" {
@@ -161,14 +166,7 @@ func (h *OrderHandler) CompleteRide(w http.ResponseWriter, r *http.Request) {
 
 	order, err := h.service.CompleteRide(r.Context(), orderID)
 	if err != nil {
-		switch err {
-		case service.ErrOrderNotFound:
-			utils.ErrorResponse(w, http.StatusNotFound, "order not found")
-		case service.ErrInvalidTransition:
-			utils.ErrorResponse(w, http.StatusConflict, "cannot complete ride with current status")
-		default:
-			utils.ErrorResponse(w, http.StatusInternalServerError, "failed to complete ride")
-		}
+		handleServiceError(w, err)
 		return
 	}
 
@@ -176,7 +174,7 @@ func (h *OrderHandler) CompleteRide(w http.ResponseWriter, r *http.Request) {
 }
 
 // CancelRide handles PUT /api/v1/rides/{orderID}/cancel
-// Cancels a pending or assigned ride.
+// User cancels the ride. Wallet balance is unlocked.
 func (h *OrderHandler) CancelRide(w http.ResponseWriter, r *http.Request) {
 	orderID := chi.URLParam(r, "orderID")
 	if orderID == "" {
@@ -184,20 +182,35 @@ func (h *OrderHandler) CancelRide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	order, err := h.service.CancelRide(r.Context(), orderID)
+	var req model.CancelRideRequest
+	// Body is optional for cancel
+	json.NewDecoder(r.Body).Decode(&req)
+
+	order, err := h.service.CancelRide(r.Context(), orderID, &req)
 	if err != nil {
-		switch err {
-		case service.ErrOrderNotFound:
-			utils.ErrorResponse(w, http.StatusNotFound, "order not found")
-		case service.ErrInvalidTransition:
-			utils.ErrorResponse(w, http.StatusConflict, "cannot cancel ride with current status")
-		default:
-			utils.ErrorResponse(w, http.StatusInternalServerError, "failed to cancel ride")
-		}
+		handleServiceError(w, err)
 		return
 	}
 
 	utils.SuccessMessageResponse(w, http.StatusOK, "ride cancelled successfully", order)
+}
+
+// DriverCancelRide handles PUT /api/v1/rides/{orderID}/driver-cancel
+// Driver cancels → order goes back to PENDING for re-matching.
+func (h *OrderHandler) DriverCancelRide(w http.ResponseWriter, r *http.Request) {
+	orderID := chi.URLParam(r, "orderID")
+	if orderID == "" {
+		utils.ErrorResponse(w, http.StatusBadRequest, "order ID is required")
+		return
+	}
+
+	order, err := h.service.DriverCancelRide(r.Context(), orderID)
+	if err != nil {
+		handleServiceError(w, err)
+		return
+	}
+
+	utils.SuccessMessageResponse(w, http.StatusOK, "driver cancelled, re-matching in progress", order)
 }
 
 // GetUserOrders handles GET /api/v1/rides/user/{userID}
@@ -241,4 +254,22 @@ func HealthCheck(w http.ResponseWriter, r *http.Request) {
 		"status":  "healthy",
 		"service": "ride-order-service",
 	})
+}
+
+// handleServiceError maps service errors to HTTP responses.
+func handleServiceError(w http.ResponseWriter, err error) {
+	switch err {
+	case service.ErrOrderNotFound:
+		utils.ErrorResponse(w, http.StatusNotFound, "order not found")
+	case service.ErrInvalidTransition:
+		utils.ErrorResponse(w, http.StatusConflict, "invalid status transition for current order state")
+	case service.ErrDriverAlreadyAssigned:
+		utils.ErrorResponse(w, http.StatusConflict, "driver already assigned to this order")
+	case service.ErrNoDriverAssigned:
+		utils.ErrorResponse(w, http.StatusConflict, "no driver assigned to this order")
+	case service.ErrInvalidRequest:
+		utils.ErrorResponse(w, http.StatusBadRequest, err.Error())
+	default:
+		utils.ErrorResponse(w, http.StatusInternalServerError, "internal server error")
+	}
 }

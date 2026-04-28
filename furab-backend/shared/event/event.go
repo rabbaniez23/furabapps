@@ -60,10 +60,14 @@ type EventHandler func(ctx context.Context, event *Event) error
 
 const (
 	// Ride events
-	TopicRideCreated   = "ride.created"
-	TopicRideAssigned  = "ride.assigned"
-	TopicRideStarted   = "ride.started"
-	TopicRideCompleted = "ride.completed"
+	TopicRideCreated          = "ride.created"
+	TopicRideAssigned         = "ride.assigned"
+	TopicRidePickingUp        = "ride.picking_up"
+	TopicRideOnTheWay         = "ride.on_the_way"
+	TopicRideStarted          = "ride.started" // kept for backward compat
+	TopicRideCompleted        = "ride.completed"
+	TopicRideCancelled        = "ride.cancelled"
+	TopicRideDriverCancelled  = "ride.driver_cancelled"
 
 	// Food events
 	TopicFoodCreated  = "food.created"
@@ -77,6 +81,11 @@ const (
 	TopicPaymentAuthorized = "payment.authorized"
 	TopicPaymentCaptured   = "payment.captured"
 	TopicPaymentFailed     = "payment.failed"
+
+	// Wallet events
+	TopicWalletLock   = "wallet.lock"
+	TopicWalletUnlock = "wallet.unlock"
+	TopicWalletDeduct = "wallet.deduct"
 
 	// Settlement events
 	TopicSettlementCompleted = "settlement.completed"

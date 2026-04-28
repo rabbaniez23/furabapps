@@ -12,21 +12,43 @@ type RideStatus string
 const (
 	// RideStatusPending indicates the ride order has been created but not yet assigned.
 	RideStatusPending RideStatus = "PENDING"
-	// RideStatusAssigned indicates a driver has been assigned to the ride.
+	// RideStatusAssigned indicates a driver has been assigned (accepted the offer).
 	RideStatusAssigned RideStatus = "ASSIGNED"
-	// RideStatusStarted indicates the ride is in progress.
-	RideStatusStarted RideStatus = "STARTED"
+	// RideStatusPickingUp indicates the driver is heading to the pickup location.
+	RideStatusPickingUp RideStatus = "PICKING_UP"
+	// RideStatusOnTheWay indicates the ride is in progress (passenger picked up, heading to dropoff).
+	RideStatusOnTheWay RideStatus = "ON_THE_WAY"
 	// RideStatusCompleted indicates the ride has been completed successfully.
 	RideStatusCompleted RideStatus = "COMPLETED"
 	// RideStatusCancelled indicates the ride has been cancelled.
 	RideStatusCancelled RideStatus = "CANCELLED"
 )
 
+// PaymentStatus represents the payment state of a ride order.
+type PaymentStatus string
+
+const (
+	// PaymentStatusNone indicates no payment action has been taken yet.
+	PaymentStatusNone PaymentStatus = "NONE"
+	// PaymentStatusAuthorized indicates wallet saldo has been locked (reserved).
+	PaymentStatusAuthorized PaymentStatus = "AUTHORIZED"
+	// PaymentStatusCaptured indicates payment has been captured (deducted) after ride completion.
+	PaymentStatusCaptured PaymentStatus = "CAPTURED"
+	// PaymentStatusFailed indicates payment capture failed.
+	PaymentStatusFailed PaymentStatus = "FAILED"
+	// PaymentStatusRefunded indicates payment has been refunded (wallet unlocked).
+	PaymentStatusRefunded PaymentStatus = "REFUNDED"
+)
+
 // ValidTransitions defines the allowed state transitions for ride orders.
+// Flow: PENDING → ASSIGNED → PICKING_UP → ON_THE_WAY → COMPLETED
+//
+//	PENDING/ASSIGNED/PICKING_UP → CANCELLED
 var ValidTransitions = map[RideStatus][]RideStatus{
 	RideStatusPending:   {RideStatusAssigned, RideStatusCancelled},
-	RideStatusAssigned:  {RideStatusStarted, RideStatusCancelled},
-	RideStatusStarted:   {RideStatusCompleted},
+	RideStatusAssigned:  {RideStatusPickingUp, RideStatusCancelled},
+	RideStatusPickingUp: {RideStatusOnTheWay, RideStatusCancelled},
+	RideStatusOnTheWay:  {RideStatusCompleted},
 	RideStatusCompleted: {},
 	RideStatusCancelled: {},
 }
@@ -48,8 +70,8 @@ func (s RideStatus) CanTransitionTo(target RideStatus) bool {
 // IsValid checks if the ride status is a known valid status.
 func (s RideStatus) IsValid() bool {
 	switch s {
-	case RideStatusPending, RideStatusAssigned, RideStatusStarted,
-		RideStatusCompleted, RideStatusCancelled:
+	case RideStatusPending, RideStatusAssigned, RideStatusPickingUp,
+		RideStatusOnTheWay, RideStatusCompleted, RideStatusCancelled:
 		return true
 	}
 	return false
@@ -78,17 +100,20 @@ func (l *Location) Validate() error {
 
 // RideOrder represents a ride order in the system.
 type RideOrder struct {
-	ID              string     `json:"id"`
-	UserID          string     `json:"user_id"`
-	DriverID        string     `json:"driver_id,omitempty"`
-	PickupLocation  Location   `json:"pickup_location"`
-	DropoffLocation Location   `json:"dropoff_location"`
-	Status          RideStatus `json:"status"`
-	Fare            float64    `json:"fare"`
-	Distance        float64    `json:"distance"`         // in kilometers
-	EstimatedDuration int      `json:"estimated_duration"` // in minutes
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ID                string        `json:"id"`
+	UserID            string        `json:"user_id"`
+	DriverID          string        `json:"driver_id,omitempty"`
+	PickupLocation    Location      `json:"pickup_location"`
+	DropoffLocation   Location      `json:"dropoff_location"`
+	Status            RideStatus    `json:"status"`
+	PaymentStatus     PaymentStatus `json:"payment_status"`
+	Fare              float64       `json:"fare"`
+	Distance          float64       `json:"distance"`           // in kilometers
+	EstimatedDuration int           `json:"estimated_duration"` // in minutes
+	CancelledBy       string        `json:"cancelled_by,omitempty"` // "user" or "driver"
+	CancelReason      string        `json:"cancel_reason,omitempty"`
+	CreatedAt         time.Time     `json:"created_at"`
+	UpdatedAt         time.Time     `json:"updated_at"`
 }
 
 // --- Request DTOs ---
@@ -127,6 +152,12 @@ func (r *AssignDriverRequest) Validate() error {
 	return nil
 }
 
+// CancelRideRequest is the request body for cancelling a ride.
+type CancelRideRequest struct {
+	CancelledBy  string `json:"cancelled_by"`  // "user" or "driver"
+	CancelReason string `json:"cancel_reason,omitempty"`
+}
+
 // --- Response DTOs ---
 
 // RideOrderResponse wraps a ride order for API response.
@@ -153,8 +184,15 @@ type RideAssignedEvent struct {
 	UserID   string `json:"user_id"`
 }
 
-// RideStartedEvent is the payload for the ride.started event.
-type RideStartedEvent struct {
+// RidePickingUpEvent is the payload for the ride.picking_up event.
+type RidePickingUpEvent struct {
+	OrderID  string `json:"order_id"`
+	DriverID string `json:"driver_id"`
+	UserID   string `json:"user_id"`
+}
+
+// RideOnTheWayEvent is the payload for the ride.on_the_way event.
+type RideOnTheWayEvent struct {
 	OrderID  string `json:"order_id"`
 	DriverID string `json:"driver_id"`
 	UserID   string `json:"user_id"`
@@ -167,4 +205,23 @@ type RideCompletedEvent struct {
 	UserID   string  `json:"user_id"`
 	Fare     float64 `json:"fare"`
 	Distance float64 `json:"distance"`
+}
+
+// RideCancelledEvent is the payload for the ride.cancelled event.
+type RideCancelledEvent struct {
+	OrderID     string `json:"order_id"`
+	UserID      string `json:"user_id"`
+	DriverID    string `json:"driver_id,omitempty"`
+	CancelledBy string `json:"cancelled_by"` // "user" or "driver"
+	Reason      string `json:"reason,omitempty"`
+}
+
+// RideDriverCancelledEvent is the payload when driver cancels, triggering re-match.
+type RideDriverCancelledEvent struct {
+	OrderID         string   `json:"order_id"`
+	UserID          string   `json:"user_id"`
+	PreviousDriverID string  `json:"previous_driver_id"`
+	PickupLocation  Location `json:"pickup_location"`
+	DropoffLocation Location `json:"dropoff_location"`
+	EstimatedFare   float64  `json:"estimated_fare"`
 }

@@ -1,6 +1,10 @@
 // Package unit contains unit tests for the ride order service.
 // Unit tests do NOT access any database or external service.
 // All dependencies are mocked using gomock.
+//
+// Tests cover the full ride flowchart:
+// PENDING → ASSIGNED → PICKING_UP → ON_THE_WAY → COMPLETED
+// Plus: user cancel, driver cancel (re-match), wallet lock/unlock, payment capture
 package unit
 
 import (
@@ -60,19 +64,22 @@ func sampleOrder() *model.RideOrder {
 			Longitude: 106.8650,
 			Address:   "Ancol, Jakarta Utara",
 		},
-		Status:    model.RideStatusPending,
-		Fare:      18500,
-		Distance:  4.2,
+		Status:            model.RideStatusPending,
+		PaymentStatus:     model.PaymentStatusNone,
+		Fare:              18500,
+		Distance:          4.2,
 		EstimatedDuration: 9,
-		CreatedAt: time.Now().UTC(),
-		UpdatedAt: time.Now().UTC(),
+		CreatedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
 	}
 }
 
-// --- Test Cases: CreateOrder ---
+// ========================================
+// Test Cases: CreateOrder
+// ========================================
 
 // TestCreateOrder_Success tests creating a ride order with valid data.
-// Expected: order created with PENDING status, ride.created event published.
+// Expected: order created with PENDING status, ride.created + wallet.lock events published.
 func TestCreateOrder_Success(t *testing.T) {
 	svc, mockRepo, mockPublisher, ctrl := newTestService(t)
 	defer ctrl.Finish()
@@ -85,9 +92,14 @@ func TestCreateOrder_Success(t *testing.T) {
 		Create(ctx, gomock.Any()).
 		Return(nil)
 
-	// Expect event to be published
+	// Expect ride.created event
 	mockPublisher.EXPECT().
 		Publish(ctx, event.TopicRideCreated, gomock.Any()).
+		Return(nil)
+
+	// Expect wallet.lock event (saldo locked)
+	mockPublisher.EXPECT().
+		Publish(ctx, event.TopicWalletLock, gomock.Any()).
 		Return(nil)
 
 	order, err := svc.CreateOrder(ctx, req)
@@ -101,6 +113,9 @@ func TestCreateOrder_Success(t *testing.T) {
 	if order.Status != model.RideStatusPending {
 		t.Errorf("expected status PENDING, got: %s", order.Status)
 	}
+	if order.PaymentStatus != model.PaymentStatusNone {
+		t.Errorf("expected payment status NONE, got: %s", order.PaymentStatus)
+	}
 	if order.UserID != req.UserID {
 		t.Errorf("expected user ID %s, got: %s", req.UserID, order.UserID)
 	}
@@ -113,7 +128,6 @@ func TestCreateOrder_Success(t *testing.T) {
 }
 
 // TestCreateOrder_NilRequest tests creating a ride order with nil request.
-// Expected: error returned.
 func TestCreateOrder_NilRequest(t *testing.T) {
 	svc, _, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
@@ -125,7 +139,6 @@ func TestCreateOrder_NilRequest(t *testing.T) {
 }
 
 // TestCreateOrder_InvalidPickup tests creating a ride order with empty pickup address.
-// Expected: validation error returned.
 func TestCreateOrder_InvalidPickup(t *testing.T) {
 	svc, _, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
@@ -140,7 +153,6 @@ func TestCreateOrder_InvalidPickup(t *testing.T) {
 }
 
 // TestCreateOrder_InvalidDropoff tests creating a ride order with empty dropoff address.
-// Expected: validation error returned.
 func TestCreateOrder_InvalidDropoff(t *testing.T) {
 	svc, _, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
@@ -155,7 +167,6 @@ func TestCreateOrder_InvalidDropoff(t *testing.T) {
 }
 
 // TestCreateOrder_EmptyUserID tests creating a ride order with empty user ID.
-// Expected: validation error returned.
 func TestCreateOrder_EmptyUserID(t *testing.T) {
 	svc, _, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
@@ -169,10 +180,11 @@ func TestCreateOrder_EmptyUserID(t *testing.T) {
 	}
 }
 
-// --- Test Cases: GetOrder ---
+// ========================================
+// Test Cases: GetOrder
+// ========================================
 
 // TestGetOrder_Success tests retrieving an existing ride order.
-// Expected: order returned successfully.
 func TestGetOrder_Success(t *testing.T) {
 	svc, mockRepo, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
@@ -194,7 +206,6 @@ func TestGetOrder_Success(t *testing.T) {
 }
 
 // TestGetOrder_NotFound tests retrieving a non-existent order.
-// Expected: ErrOrderNotFound returned.
 func TestGetOrder_NotFound(t *testing.T) {
 	svc, mockRepo, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
@@ -212,7 +223,6 @@ func TestGetOrder_NotFound(t *testing.T) {
 }
 
 // TestGetOrder_EmptyID tests retrieving an order with empty ID.
-// Expected: ErrInvalidRequest returned.
 func TestGetOrder_EmptyID(t *testing.T) {
 	svc, _, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
@@ -223,10 +233,12 @@ func TestGetOrder_EmptyID(t *testing.T) {
 	}
 }
 
-// --- Test Cases: AssignDriver ---
+// ========================================
+// Test Cases: AssignDriver (PENDING → ASSIGNED)
+// ========================================
 
 // TestAssignDriver_Success tests assigning a driver to a PENDING order.
-// Expected: status transitions to ASSIGNED, ride.assigned event published.
+// Expected: status ASSIGNED, payment AUTHORIZED, ride.assigned event published.
 func TestAssignDriver_Success(t *testing.T) {
 	svc, mockRepo, mockPublisher, ctrl := newTestService(t)
 	defer ctrl.Finish()
@@ -257,17 +269,19 @@ func TestAssignDriver_Success(t *testing.T) {
 	if result.DriverID != "driver-456" {
 		t.Errorf("expected driver ID driver-456, got: %s", result.DriverID)
 	}
+	if result.PaymentStatus != model.PaymentStatusAuthorized {
+		t.Errorf("expected payment AUTHORIZED, got: %s", result.PaymentStatus)
+	}
 }
 
 // TestAssignDriver_InvalidStatus tests assigning a driver to a COMPLETED order.
-// Expected: ErrInvalidTransition returned.
 func TestAssignDriver_InvalidStatus(t *testing.T) {
 	svc, mockRepo, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
 	ctx := context.Background()
 	order := sampleOrder()
-	order.Status = model.RideStatusCompleted // cannot assign
+	order.Status = model.RideStatusCompleted
 
 	mockRepo.EXPECT().
 		GetByID(ctx, order.ID).
@@ -279,8 +293,7 @@ func TestAssignDriver_InvalidStatus(t *testing.T) {
 	}
 }
 
-// TestAssignDriver_AlreadyAssigned tests assigning a driver when one is already assigned.
-// Expected: ErrDriverAlreadyAssigned returned.
+// TestAssignDriver_AlreadyAssigned tests assigning when driver already assigned.
 func TestAssignDriver_AlreadyAssigned(t *testing.T) {
 	svc, mockRepo, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
@@ -288,7 +301,7 @@ func TestAssignDriver_AlreadyAssigned(t *testing.T) {
 	ctx := context.Background()
 	order := sampleOrder()
 	order.Status = model.RideStatusPending
-	order.DriverID = "existing-driver" // already assigned
+	order.DriverID = "existing-driver"
 
 	mockRepo.EXPECT().
 		GetByID(ctx, order.ID).
@@ -300,11 +313,13 @@ func TestAssignDriver_AlreadyAssigned(t *testing.T) {
 	}
 }
 
-// --- Test Cases: StartRide ---
+// ========================================
+// Test Cases: PickingUp (ASSIGNED → PICKING_UP)
+// ========================================
 
-// TestStartRide_Success tests starting an ASSIGNED ride.
-// Expected: status transitions to STARTED, ride.started event published.
-func TestStartRide_Success(t *testing.T) {
+// TestPickingUp_Success tests transitioning to PICKING_UP status.
+// Flowchart: driver is heading to pickup location.
+func TestPickingUp_Success(t *testing.T) {
 	svc, mockRepo, mockPublisher, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
@@ -322,49 +337,50 @@ func TestStartRide_Success(t *testing.T) {
 		Return(nil)
 
 	mockPublisher.EXPECT().
-		Publish(ctx, event.TopicRideStarted, gomock.Any()).
+		Publish(ctx, event.TopicRidePickingUp, gomock.Any()).
 		Return(nil)
 
-	result, err := svc.StartRide(ctx, order.ID)
+	result, err := svc.PickingUp(ctx, order.ID)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
-	if result.Status != model.RideStatusStarted {
-		t.Errorf("expected status STARTED, got: %s", result.Status)
+	if result.Status != model.RideStatusPickingUp {
+		t.Errorf("expected status PICKING_UP, got: %s", result.Status)
 	}
 }
 
-// TestStartRide_InvalidStatus tests starting a PENDING ride (should fail).
-// Expected: ErrInvalidTransition returned.
-func TestStartRide_InvalidStatus(t *testing.T) {
+// TestPickingUp_InvalidStatus tests picking up from PENDING (should fail).
+func TestPickingUp_InvalidStatus(t *testing.T) {
 	svc, mockRepo, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
 	ctx := context.Background()
 	order := sampleOrder()
-	order.Status = model.RideStatusPending // cannot start from PENDING
+	order.Status = model.RideStatusPending // cannot picking_up from PENDING
 
 	mockRepo.EXPECT().
 		GetByID(ctx, order.ID).
 		Return(order, nil)
 
-	_, err := svc.StartRide(ctx, order.ID)
+	_, err := svc.PickingUp(ctx, order.ID)
 	if err != service.ErrInvalidTransition {
 		t.Fatalf("expected ErrInvalidTransition, got: %v", err)
 	}
 }
 
-// --- Test Cases: CompleteRide ---
+// ========================================
+// Test Cases: OnTheWay (PICKING_UP → ON_THE_WAY)
+// ========================================
 
-// TestCompleteRide_Success tests completing a STARTED ride.
-// Expected: status transitions to COMPLETED, ride.completed event published.
-func TestCompleteRide_Success(t *testing.T) {
+// TestOnTheWay_Success tests transitioning to ON_THE_WAY status.
+// Flowchart: passenger picked up, ride in progress.
+func TestOnTheWay_Success(t *testing.T) {
 	svc, mockRepo, mockPublisher, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
 	ctx := context.Background()
 	order := sampleOrder()
-	order.Status = model.RideStatusStarted
+	order.Status = model.RideStatusPickingUp
 	order.DriverID = "driver-456"
 
 	mockRepo.EXPECT().
@@ -376,7 +392,68 @@ func TestCompleteRide_Success(t *testing.T) {
 		Return(nil)
 
 	mockPublisher.EXPECT().
+		Publish(ctx, event.TopicRideOnTheWay, gomock.Any()).
+		Return(nil)
+
+	result, err := svc.OnTheWay(ctx, order.ID)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if result.Status != model.RideStatusOnTheWay {
+		t.Errorf("expected status ON_THE_WAY, got: %s", result.Status)
+	}
+}
+
+// TestOnTheWay_InvalidStatus tests on the way from ASSIGNED (should fail, must PICKING_UP first).
+func TestOnTheWay_InvalidStatus(t *testing.T) {
+	svc, mockRepo, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	order := sampleOrder()
+	order.Status = model.RideStatusAssigned // cannot ON_THE_WAY from ASSIGNED
+
+	mockRepo.EXPECT().
+		GetByID(ctx, order.ID).
+		Return(order, nil)
+
+	_, err := svc.OnTheWay(ctx, order.ID)
+	if err != service.ErrInvalidTransition {
+		t.Fatalf("expected ErrInvalidTransition, got: %v", err)
+	}
+}
+
+// ========================================
+// Test Cases: CompleteRide (ON_THE_WAY → COMPLETED)
+// ========================================
+
+// TestCompleteRide_Success tests completing an ON_THE_WAY ride.
+// Expected: status COMPLETED, payment CAPTURED, ride.completed + payment.captured events.
+func TestCompleteRide_Success(t *testing.T) {
+	svc, mockRepo, mockPublisher, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	order := sampleOrder()
+	order.Status = model.RideStatusOnTheWay
+	order.DriverID = "driver-456"
+
+	mockRepo.EXPECT().
+		GetByID(ctx, order.ID).
+		Return(order, nil)
+
+	mockRepo.EXPECT().
+		Update(ctx, gomock.Any()).
+		Return(nil)
+
+	// Expect ride.completed event
+	mockPublisher.EXPECT().
 		Publish(ctx, event.TopicRideCompleted, gomock.Any()).
+		Return(nil)
+
+	// Expect payment.captured event
+	mockPublisher.EXPECT().
+		Publish(ctx, event.TopicPaymentCaptured, gomock.Any()).
 		Return(nil)
 
 	result, err := svc.CompleteRide(ctx, order.ID)
@@ -386,17 +463,19 @@ func TestCompleteRide_Success(t *testing.T) {
 	if result.Status != model.RideStatusCompleted {
 		t.Errorf("expected status COMPLETED, got: %s", result.Status)
 	}
+	if result.PaymentStatus != model.PaymentStatusCaptured {
+		t.Errorf("expected payment CAPTURED, got: %s", result.PaymentStatus)
+	}
 }
 
-// TestCompleteRide_InvalidStatus tests completing a PENDING ride (should fail).
-// Expected: ErrInvalidTransition returned.
+// TestCompleteRide_InvalidStatus tests completing from PICKING_UP (should fail).
 func TestCompleteRide_InvalidStatus(t *testing.T) {
 	svc, mockRepo, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
 	ctx := context.Background()
 	order := sampleOrder()
-	order.Status = model.RideStatusPending // cannot complete from PENDING
+	order.Status = model.RideStatusPickingUp // cannot complete from PICKING_UP
 
 	mockRepo.EXPECT().
 		GetByID(ctx, order.ID).
@@ -408,12 +487,33 @@ func TestCompleteRide_InvalidStatus(t *testing.T) {
 	}
 }
 
-// --- Test Cases: CancelRide ---
-
-// TestCancelRide_Success tests cancelling a PENDING ride.
-// Expected: status transitions to CANCELLED.
-func TestCancelRide_Success(t *testing.T) {
+// TestCompleteRide_FromPending tests completing from PENDING (should fail).
+func TestCompleteRide_FromPending(t *testing.T) {
 	svc, mockRepo, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	order := sampleOrder()
+	order.Status = model.RideStatusPending
+
+	mockRepo.EXPECT().
+		GetByID(ctx, order.ID).
+		Return(order, nil)
+
+	_, err := svc.CompleteRide(ctx, order.ID)
+	if err != service.ErrInvalidTransition {
+		t.Fatalf("expected ErrInvalidTransition, got: %v", err)
+	}
+}
+
+// ========================================
+// Test Cases: CancelRide (User Cancel)
+// ========================================
+
+// TestCancelRide_FromPending tests user cancelling a PENDING ride.
+// Expected: status CANCELLED, payment REFUNDED, ride.cancelled + wallet.unlock events.
+func TestCancelRide_FromPending(t *testing.T) {
+	svc, mockRepo, mockPublisher, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
 	ctx := context.Background()
@@ -428,17 +528,103 @@ func TestCancelRide_Success(t *testing.T) {
 		Update(ctx, gomock.Any()).
 		Return(nil)
 
-	result, err := svc.CancelRide(ctx, order.ID)
+	// Expect ride.cancelled event
+	mockPublisher.EXPECT().
+		Publish(ctx, event.TopicRideCancelled, gomock.Any()).
+		Return(nil)
+
+	// Expect wallet.unlock event
+	mockPublisher.EXPECT().
+		Publish(ctx, event.TopicWalletUnlock, gomock.Any()).
+		Return(nil)
+
+	cancelReq := &model.CancelRideRequest{CancelledBy: "user", CancelReason: "changed my mind"}
+	result, err := svc.CancelRide(ctx, order.ID, cancelReq)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 	if result.Status != model.RideStatusCancelled {
 		t.Errorf("expected status CANCELLED, got: %s", result.Status)
 	}
+	if result.PaymentStatus != model.PaymentStatusRefunded {
+		t.Errorf("expected payment REFUNDED, got: %s", result.PaymentStatus)
+	}
+	if result.CancelledBy != "user" {
+		t.Errorf("expected cancelled_by user, got: %s", result.CancelledBy)
+	}
+}
+
+// TestCancelRide_FromAssigned tests user cancelling an ASSIGNED ride.
+func TestCancelRide_FromAssigned(t *testing.T) {
+	svc, mockRepo, mockPublisher, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	order := sampleOrder()
+	order.Status = model.RideStatusAssigned
+	order.DriverID = "driver-456"
+
+	mockRepo.EXPECT().
+		GetByID(ctx, order.ID).
+		Return(order, nil)
+
+	mockRepo.EXPECT().
+		Update(ctx, gomock.Any()).
+		Return(nil)
+
+	mockPublisher.EXPECT().
+		Publish(ctx, event.TopicRideCancelled, gomock.Any()).
+		Return(nil)
+
+	mockPublisher.EXPECT().
+		Publish(ctx, event.TopicWalletUnlock, gomock.Any()).
+		Return(nil)
+
+	result, err := svc.CancelRide(ctx, order.ID, nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if result.Status != model.RideStatusCancelled {
+		t.Errorf("expected CANCELLED, got: %s", result.Status)
+	}
+}
+
+// TestCancelRide_FromPickingUp tests user cancelling while driver is heading to pickup.
+func TestCancelRide_FromPickingUp(t *testing.T) {
+	svc, mockRepo, mockPublisher, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	order := sampleOrder()
+	order.Status = model.RideStatusPickingUp
+	order.DriverID = "driver-456"
+
+	mockRepo.EXPECT().
+		GetByID(ctx, order.ID).
+		Return(order, nil)
+
+	mockRepo.EXPECT().
+		Update(ctx, gomock.Any()).
+		Return(nil)
+
+	mockPublisher.EXPECT().
+		Publish(ctx, event.TopicRideCancelled, gomock.Any()).
+		Return(nil)
+
+	mockPublisher.EXPECT().
+		Publish(ctx, event.TopicWalletUnlock, gomock.Any()).
+		Return(nil)
+
+	result, err := svc.CancelRide(ctx, order.ID, nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if result.Status != model.RideStatusCancelled {
+		t.Errorf("expected CANCELLED, got: %s", result.Status)
+	}
 }
 
 // TestCancelRide_AlreadyCompleted tests cancelling a COMPLETED ride (should fail).
-// Expected: ErrInvalidTransition returned.
 func TestCancelRide_AlreadyCompleted(t *testing.T) {
 	svc, mockRepo, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
@@ -451,16 +637,189 @@ func TestCancelRide_AlreadyCompleted(t *testing.T) {
 		GetByID(ctx, order.ID).
 		Return(order, nil)
 
-	_, err := svc.CancelRide(ctx, order.ID)
+	_, err := svc.CancelRide(ctx, order.ID, nil)
 	if err != service.ErrInvalidTransition {
 		t.Fatalf("expected ErrInvalidTransition, got: %v", err)
 	}
 }
 
-// --- Test Cases: GetUserOrders ---
+// TestCancelRide_OnTheWay tests cancelling while ON_THE_WAY (cannot cancel mid-ride).
+func TestCancelRide_OnTheWay(t *testing.T) {
+	svc, mockRepo, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	order := sampleOrder()
+	order.Status = model.RideStatusOnTheWay // cannot cancel mid-ride
+
+	mockRepo.EXPECT().
+		GetByID(ctx, order.ID).
+		Return(order, nil)
+
+	_, err := svc.CancelRide(ctx, order.ID, nil)
+	if err != service.ErrInvalidTransition {
+		t.Fatalf("expected ErrInvalidTransition, got: %v", err)
+	}
+}
+
+// ========================================
+// Test Cases: DriverCancelRide (Re-Match)
+// ========================================
+
+// TestDriverCancel_Success tests driver cancellation with re-matching.
+// Flowchart: Driver Cancel → Re-Match Driver → back to matching-service
+func TestDriverCancel_Success(t *testing.T) {
+	svc, mockRepo, mockPublisher, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	order := sampleOrder()
+	order.Status = model.RideStatusAssigned
+	order.DriverID = "driver-456"
+
+	mockRepo.EXPECT().
+		GetByID(ctx, order.ID).
+		Return(order, nil)
+
+	mockRepo.EXPECT().
+		Update(ctx, gomock.Any()).
+		Return(nil)
+
+	// Expect ride.driver_cancelled event → triggers re-matching
+	mockPublisher.EXPECT().
+		Publish(ctx, event.TopicRideDriverCancelled, gomock.Any()).
+		Return(nil)
+
+	result, err := svc.DriverCancelRide(ctx, order.ID)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	// Order goes back to PENDING for re-matching
+	if result.Status != model.RideStatusPending {
+		t.Errorf("expected status PENDING (for re-match), got: %s", result.Status)
+	}
+	// Driver removed
+	if result.DriverID != "" {
+		t.Errorf("expected empty driver ID after driver cancel, got: %s", result.DriverID)
+	}
+	// Wallet stays locked (don't unlock until user cancels or ride completes)
+	if result.PaymentStatus != model.PaymentStatusAuthorized {
+		t.Errorf("expected payment still AUTHORIZED, got: %s", result.PaymentStatus)
+	}
+}
+
+// TestDriverCancel_FromPickingUp tests driver cancel during PICKING_UP.
+func TestDriverCancel_FromPickingUp(t *testing.T) {
+	svc, mockRepo, mockPublisher, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	order := sampleOrder()
+	order.Status = model.RideStatusPickingUp
+	order.DriverID = "driver-456"
+
+	mockRepo.EXPECT().
+		GetByID(ctx, order.ID).
+		Return(order, nil)
+
+	mockRepo.EXPECT().
+		Update(ctx, gomock.Any()).
+		Return(nil)
+
+	mockPublisher.EXPECT().
+		Publish(ctx, event.TopicRideDriverCancelled, gomock.Any()).
+		Return(nil)
+
+	result, err := svc.DriverCancelRide(ctx, order.ID)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if result.Status != model.RideStatusPending {
+		t.Errorf("expected PENDING for re-match, got: %s", result.Status)
+	}
+}
+
+// TestDriverCancel_InvalidStatus tests driver cancel from ON_THE_WAY (should fail).
+func TestDriverCancel_InvalidStatus(t *testing.T) {
+	svc, mockRepo, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	order := sampleOrder()
+	order.Status = model.RideStatusOnTheWay // cannot driver cancel mid-ride
+	order.DriverID = "driver-456"
+
+	mockRepo.EXPECT().
+		GetByID(ctx, order.ID).
+		Return(order, nil)
+
+	_, err := svc.DriverCancelRide(ctx, order.ID)
+	if err != service.ErrInvalidTransition {
+		t.Fatalf("expected ErrInvalidTransition, got: %v", err)
+	}
+}
+
+// TestDriverCancel_NoDriver tests driver cancel when no driver assigned.
+func TestDriverCancel_NoDriver(t *testing.T) {
+	svc, mockRepo, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	order := sampleOrder()
+	order.Status = model.RideStatusAssigned
+	order.DriverID = "" // no driver
+
+	mockRepo.EXPECT().
+		GetByID(ctx, order.ID).
+		Return(order, nil)
+
+	_, err := svc.DriverCancelRide(ctx, order.ID)
+	if err != service.ErrNoDriverAssigned {
+		t.Fatalf("expected ErrNoDriverAssigned, got: %v", err)
+	}
+}
+
+// ========================================
+// Test Cases: Full Flow (State Machine)
+// ========================================
+
+// TestFullFlow_HappyPath tests the complete ride state machine.
+// Validates: PENDING → ASSIGNED → PICKING_UP → ON_THE_WAY → COMPLETED
+func TestFullFlow_HappyPath(t *testing.T) {
+	// Test that the state machine transitions are correct
+	transitions := []struct {
+		from model.RideStatus
+		to   model.RideStatus
+		ok   bool
+	}{
+		{model.RideStatusPending, model.RideStatusAssigned, true},
+		{model.RideStatusAssigned, model.RideStatusPickingUp, true},
+		{model.RideStatusPickingUp, model.RideStatusOnTheWay, true},
+		{model.RideStatusOnTheWay, model.RideStatusCompleted, true},
+		// Invalid transitions
+		{model.RideStatusPending, model.RideStatusPickingUp, false},
+		{model.RideStatusPending, model.RideStatusOnTheWay, false},
+		{model.RideStatusPending, model.RideStatusCompleted, false},
+		{model.RideStatusAssigned, model.RideStatusOnTheWay, false},
+		{model.RideStatusAssigned, model.RideStatusCompleted, false},
+		{model.RideStatusPickingUp, model.RideStatusCompleted, false},
+		{model.RideStatusOnTheWay, model.RideStatusCancelled, false},
+		{model.RideStatusCompleted, model.RideStatusCancelled, false},
+	}
+
+	for _, tc := range transitions {
+		result := tc.from.CanTransitionTo(tc.to)
+		if result != tc.ok {
+			t.Errorf("%s → %s: expected %v, got %v", tc.from, tc.to, tc.ok, result)
+		}
+	}
+}
+
+// ========================================
+// Test Cases: GetUserOrders
+// ========================================
 
 // TestGetUserOrders_Success tests retrieving orders for a valid user.
-// Expected: list of orders returned with count.
 func TestGetUserOrders_Success(t *testing.T) {
 	svc, mockRepo, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
@@ -489,7 +848,6 @@ func TestGetUserOrders_Success(t *testing.T) {
 }
 
 // TestGetUserOrders_Empty tests retrieving orders for a user with no orders.
-// Expected: empty list, total = 0.
 func TestGetUserOrders_Empty(t *testing.T) {
 	svc, mockRepo, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
