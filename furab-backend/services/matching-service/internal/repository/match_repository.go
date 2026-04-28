@@ -1,30 +1,21 @@
-// Package repository provides data access layer for matching-service.
+// Package repository provides data access layer for match requests.
 package repository
 
-import "context"
+import (
+	"context"
+	"errors"
 
-// MatchRepository defines the interface for matching-service data access.
+	"furab-backend/services/matching-service/internal/model"
+)
+
+var (
+	ErrMatchNotFound  = errors.New("match request not found")
+)
+
+// MatchRepository defines the interface for match request data access.
 type MatchRepository interface {
-
-	// FindDriver performs the FindDriver operation.
-	FindDriver(ctx context.Context) error
-
-	// AcceptMatch performs the AcceptMatch operation.
-	AcceptMatch(ctx context.Context) error
-
-	// RejectMatch performs the RejectMatch operation.
-	RejectMatch(ctx context.Context) error
-
-	// GetMatchStatus performs the GetMatchStatus operation.
-	GetMatchStatus(ctx context.Context) error
-}
-
-// postgresMatchRepository implements MatchRepository using PostgreSQL.
-type postgresMatchRepository struct {
-	// TODO: add *sql.DB field
-}
-
-// NewPostgresMatchRepository creates a new PostgreSQL-based repository.
-func NewPostgresMatchRepository() MatchRepository {
-	return &postgresMatchRepository{}
+	Create(ctx context.Context, match *model.MatchRequest) error
+	GetByID(ctx context.Context, id string) (*model.MatchRequest, error)
+	Update(ctx context.Context, match *model.MatchRequest) error
+	GetByOrderID(ctx context.Context, orderID string) (*model.MatchRequest, error)
 }

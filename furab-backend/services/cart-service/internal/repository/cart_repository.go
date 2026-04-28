@@ -1,33 +1,27 @@
-// Package repository provides data access layer for cart-service.
+// Package repository provides data access layer for cart.
 package repository
 
-import "context"
+import (
+	"context"
+	"errors"
 
-// CartRepository defines the interface for cart-service data access.
+	"furab-backend/services/cart-service/internal/model"
+)
+
+// Common repository errors.
+var (
+	ErrCartNotFound = errors.New("cart not found")
+	ErrItemNotFound = errors.New("item not found in cart")
+)
+
+// CartRepository defines the interface for cart data access.
 type CartRepository interface {
+	// GetByUserID retrieves a cart by user ID.
+	GetByUserID(ctx context.Context, userID string) (*model.Cart, error)
 
-	// AddItem performs the AddItem operation.
-	AddItem(ctx context.Context) error
+	// Save creates or updates a cart.
+	Save(ctx context.Context, cart *model.Cart) error
 
-	// RemoveItem performs the RemoveItem operation.
-	RemoveItem(ctx context.Context) error
-
-	// UpdateQuantity performs the UpdateQuantity operation.
-	UpdateQuantity(ctx context.Context) error
-
-	// GetCart performs the GetCart operation.
-	GetCart(ctx context.Context) error
-
-	// ClearCart performs the ClearCart operation.
-	ClearCart(ctx context.Context) error
-}
-
-// postgresCartRepository implements CartRepository using PostgreSQL.
-type postgresCartRepository struct {
-	// TODO: add *sql.DB field
-}
-
-// NewPostgresCartRepository creates a new PostgreSQL-based repository.
-func NewPostgresCartRepository() CartRepository {
-	return &postgresCartRepository{}
+	// Delete removes a cart by user ID.
+	Delete(ctx context.Context, userID string) error
 }
