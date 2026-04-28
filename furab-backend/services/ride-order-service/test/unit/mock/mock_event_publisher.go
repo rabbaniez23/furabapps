@@ -4,7 +4,6 @@ package mock
 
 import (
 	"context"
-	"reflect"
 
 	"furab-backend/shared/event"
 
@@ -45,7 +44,7 @@ func (m *MockEventPublisher) Publish(ctx context.Context, topic string, evt *eve
 // Publish indicates an expected call of Publish.
 func (mr *MockEventPublisherMockRecorder) Publish(ctx, topic, evt interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Publish", reflect.TypeOf((*event.Publisher)(nil)).Elem(), ctx, topic, evt)
+	return mr.mock.ctrl.RecordCall(mr.mock, "Publish", ctx, topic, evt)
 }
 
 // Close mocks the Close method.
@@ -59,5 +58,5 @@ func (m *MockEventPublisher) Close() error {
 // Close indicates an expected call of Close.
 func (mr *MockEventPublisherMockRecorder) Close() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*event.Publisher)(nil)).Elem())
+	return mr.mock.ctrl.RecordCall(mr.mock, "Close")
 }

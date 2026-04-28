@@ -1,13 +1,11 @@
 // Package mock provides mock implementations for testing.
-// Generated mock for OrderRepository interface using gomock patterns.
+// Mock for repository.OrderRepository interface using gomock.
 package mock
 
 import (
 	"context"
-	"reflect"
 
 	"furab-backend/services/ride-order-service/internal/model"
-	"furab-backend/services/ride-order-service/internal/repository"
 
 	"go.uber.org/mock/gomock"
 )
@@ -46,7 +44,7 @@ func (m *MockOrderRepository) Create(ctx context.Context, order *model.RideOrder
 // Create indicates an expected call of Create.
 func (mr *MockOrderRepositoryMockRecorder) Create(ctx, order interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*repository.OrderRepository)(nil)).Elem(), ctx, order)
+	return mr.mock.ctrl.RecordCall(mr.mock, "Create", ctx, order)
 }
 
 // GetByID mocks the GetByID method.
@@ -61,7 +59,7 @@ func (m *MockOrderRepository) GetByID(ctx context.Context, id string) (*model.Ri
 // GetByID indicates an expected call of GetByID.
 func (mr *MockOrderRepositoryMockRecorder) GetByID(ctx, id interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByID", reflect.TypeOf((*repository.OrderRepository)(nil)).Elem(), ctx, id)
+	return mr.mock.ctrl.RecordCall(mr.mock, "GetByID", ctx, id)
 }
 
 // Update mocks the Update method.
@@ -75,7 +73,7 @@ func (m *MockOrderRepository) Update(ctx context.Context, order *model.RideOrder
 // Update indicates an expected call of Update.
 func (mr *MockOrderRepositoryMockRecorder) Update(ctx, order interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*repository.OrderRepository)(nil)).Elem(), ctx, order)
+	return mr.mock.ctrl.RecordCall(mr.mock, "Update", ctx, order)
 }
 
 // UpdateStatus mocks the UpdateStatus method.
@@ -89,7 +87,7 @@ func (m *MockOrderRepository) UpdateStatus(ctx context.Context, id string, statu
 // UpdateStatus indicates an expected call of UpdateStatus.
 func (mr *MockOrderRepositoryMockRecorder) UpdateStatus(ctx, id, status interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateStatus", reflect.TypeOf((*repository.OrderRepository)(nil)).Elem(), ctx, id, status)
+	return mr.mock.ctrl.RecordCall(mr.mock, "UpdateStatus", ctx, id, status)
 }
 
 // AssignDriver mocks the AssignDriver method.
@@ -103,7 +101,7 @@ func (m *MockOrderRepository) AssignDriver(ctx context.Context, orderID, driverI
 // AssignDriver indicates an expected call of AssignDriver.
 func (mr *MockOrderRepositoryMockRecorder) AssignDriver(ctx, orderID, driverID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssignDriver", reflect.TypeOf((*repository.OrderRepository)(nil)).Elem(), ctx, orderID, driverID)
+	return mr.mock.ctrl.RecordCall(mr.mock, "AssignDriver", ctx, orderID, driverID)
 }
 
 // GetByUserID mocks the GetByUserID method.
@@ -118,7 +116,7 @@ func (m *MockOrderRepository) GetByUserID(ctx context.Context, userID string, li
 // GetByUserID indicates an expected call of GetByUserID.
 func (mr *MockOrderRepositoryMockRecorder) GetByUserID(ctx, userID, limit, offset interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByUserID", reflect.TypeOf((*repository.OrderRepository)(nil)).Elem(), ctx, userID, limit, offset)
+	return mr.mock.ctrl.RecordCall(mr.mock, "GetByUserID", ctx, userID, limit, offset)
 }
 
 // GetByDriverID mocks the GetByDriverID method.
@@ -133,7 +131,7 @@ func (m *MockOrderRepository) GetByDriverID(ctx context.Context, driverID string
 // GetByDriverID indicates an expected call of GetByDriverID.
 func (mr *MockOrderRepositoryMockRecorder) GetByDriverID(ctx, driverID, limit, offset interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByDriverID", reflect.TypeOf((*repository.OrderRepository)(nil)).Elem(), ctx, driverID, limit, offset)
+	return mr.mock.ctrl.RecordCall(mr.mock, "GetByDriverID", ctx, driverID, limit, offset)
 }
 
 // CountByUserID mocks the CountByUserID method.
@@ -148,7 +146,7 @@ func (m *MockOrderRepository) CountByUserID(ctx context.Context, userID string) 
 // CountByUserID indicates an expected call of CountByUserID.
 func (mr *MockOrderRepositoryMockRecorder) CountByUserID(ctx, userID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountByUserID", reflect.TypeOf((*repository.OrderRepository)(nil)).Elem(), ctx, userID)
+	return mr.mock.ctrl.RecordCall(mr.mock, "CountByUserID", ctx, userID)
 }
 
 // Delete mocks the Delete method.
@@ -162,5 +160,5 @@ func (m *MockOrderRepository) Delete(ctx context.Context, id string) error {
 // Delete indicates an expected call of Delete.
 func (mr *MockOrderRepositoryMockRecorder) Delete(ctx, id interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*repository.OrderRepository)(nil)).Elem(), ctx, id)
+	return mr.mock.ctrl.RecordCall(mr.mock, "Delete", ctx, id)
 }
