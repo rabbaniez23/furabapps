@@ -4,6 +4,8 @@ package handler
 import (
 	"net/http"
 
+	"furab-backend/services/promo-service/internal/model"
+	"furab-backend/services/promo-service/internal/service"
 	"furab-backend/shared/utils"
 
 	"github.com/go-chi/chi/v5"
@@ -11,12 +13,12 @@ import (
 
 // PromoHandler handles HTTP requests for promo-service.
 type PromoHandler struct {
-	// TODO: add service dependency
+	service service.PromoService
 }
 
 // NewPromoHandler creates a new PromoHandler.
-func NewPromoHandler() *PromoHandler {
-	return &PromoHandler{}
+func NewPromoHandler(svc service.PromoService) *PromoHandler {
+	return &PromoHandler{service: svc}
 }
 
 // RegisterRoutes registers all promo-service routes.
@@ -28,6 +30,23 @@ func (h *PromoHandler) RegisterRoutes(r chi.Router) {
 				"service": "promo-service",
 			})
 		})
-		// TODO: Register endpoint routes
+		r.Post("/validate", h.ValidatePromo)
 	})
+}
+
+// ValidatePromo handles POST /api/v1/promos/validate
+func (h *PromoHandler) ValidatePromo(w http.ResponseWriter, r *http.Request) {
+	var req model.PromoValidationRequest
+	if err := utils.DecodeJSON(r, &req); err != nil {
+		utils.ErrorResponse(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	result, err := h.service.ValidatePromo(r.Context(), req.PromoCode, req.UserID, req.OrderID, req.TotalAmount)
+	if err != nil {
+		utils.ErrorResponse(w, http.StatusInternalServerError, "failed to validate promo")
+		return
+	}
+
+	utils.SuccessResponse(w, http.StatusOK, result)
 }
