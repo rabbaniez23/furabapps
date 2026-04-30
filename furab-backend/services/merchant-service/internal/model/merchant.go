@@ -1,21 +1,20 @@
-// Package model defines the domain models for merchant-service.
 package model
 
 import "time"
 
-// Merchant represents the Merchant model in merchant-service.
+// Merchant represents a shop/store owner in the system.
 type Merchant struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	// TODO: Add Merchant-specific fields
+	MerchantID        string    `json:"merchant_id"`
+	UserID            string    `json:"user_id"`
+	NamaToko          string    `json:"nama_toko"`
+	Alamat            string    `json:"alamat"`
+	Latitude          float64   `json:"latitude"`
+	Longitude         float64   `json:"longitude"`
+	Kategori          string    `json:"kategori"`
+	JamBuka           string    `json:"jam_buka"`
+	JamTutup          string    `json:"jam_tutup"`
+	StatusOperasional string    `json:"status_operasional"` // "open" or "closed"
+	IsActive          bool      `json:"is_active"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
-
-// MerchantProfile represents the MerchantProfile model in merchant-service.
-type MerchantProfile struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	// TODO: Add MerchantProfile-specific fields
-}
-
