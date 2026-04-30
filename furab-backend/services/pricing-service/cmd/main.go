@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"time"
 
+	"furab-backend/services/pricing-service/internal/client"
 	"furab-backend/services/pricing-service/internal/handler"
+	"furab-backend/services/pricing-service/internal/repository"
+	"furab-backend/services/pricing-service/internal/service"
 	"furab-backend/shared/config"
 	sharedlogger "furab-backend/shared/logger"
 
@@ -20,6 +23,12 @@ func main() {
 
 	logger.Info("starting pricing-service", "port", cfg.ServerPort)
 
+	// Compose dependencies
+	repo := repository.NewInMemoryPriceRepository()
+	orderClient := client.NewDummyOrderClient()
+	locationClient := client.NewDummyLocationClient()
+	priceService := service.NewPriceService(repo, orderClient, locationClient)
+
 	// Setup router
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
@@ -27,7 +36,7 @@ func main() {
 	r.Use(chimiddleware.Timeout(30 * time.Second))
 
 	// Register routes
-	h := handler.NewPriceHandler()
+	h := handler.NewPriceHandler(priceService)
 	h.RegisterRoutes(r)
 
 	// Start server

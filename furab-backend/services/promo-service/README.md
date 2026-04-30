@@ -1,10 +1,10 @@
-﻿# Promo Service -join ' ')
+﻿# Promo Service
 
-Promotions and discount management service
+Promo Service adalah microservice yang bertanggung jawab untuk mengelola seluruh siklus hidup promosi, mulai dari penyimpanan data promo, validasi kode, hingga perhitungan nilai diskon.
 
 ## Deskripsi
 
-TODO: Tambahkan deskripsi lengkap service ini.
+Promo Service menerima input `total_amount` dari Pricing Service, memvalidasi promo yang masuk, dan menghitung `discount_amount` serta `final_amount` untuk Payment Service.
 
 ## Tech Stack
 
@@ -13,7 +13,7 @@ TODO: Tambahkan deskripsi lengkap service ini.
 | Language | Go 1.22+ |
 | HTTP Router | chi |
 | Database | PostgreSQL |
-| Testing | gomock, go test |
+| Testing | go test |
 
 ## Struktur Folder
 
@@ -21,10 +21,13 @@ TODO: Tambahkan deskripsi lengkap service ini.
 promo-service/
 +-- cmd/main.go
 +-- internal/
+    +-- client/
+        +-- order_client.go
+        +-- user_client.go
     +-- handler/promo_handler.go
-    +-- service/promo_service.go
-    +-- repository/promo_repository.go
     +-- model/promo.go
+    +-- repository/promo_repository.go
+    +-- service/promo_service.go
 +-- test/
     +-- unit/promo_service_test.go
     +-- unit/mock/
@@ -32,6 +35,34 @@ promo-service/
 +-- go.mod
 +-- Dockerfile
 +-- README.md
+```
+
+## API Endpoint
+
+### POST /api/v1/promos/validate
+
+Request body:
+
+```json
+{
+  "promo_code": "DISKONHEMAT",
+  "user_id": "user-1",
+  "order_id": "order-1",
+  "total_amount": 100000
+}
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "status": "Valid",
+    "discount_amount": 10000,
+    "final_amount": 90000
+  }
+}
 ```
 
 ## Cara Menjalankan
