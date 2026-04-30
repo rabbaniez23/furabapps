@@ -3,19 +3,46 @@ package model
 
 import "time"
 
-// Conversation represents the Conversation model in chat-service.
-type Conversation struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	// TODO: Add Conversation-specific fields
+// ChatSession represents an active chat session.
+type ChatSession struct {
+	OrderID   string     `json:"order_id"`
+	UserID    string     `json:"user_id"`
+	DriverID  string     `json:"driver_id"`
+	CreatedAt time.Time  `json:"created_at"`
+	ClosedAt  *time.Time `json:"closed_at"` // nil if active
 }
 
-// Message represents the Message model in chat-service.
+// Message represents a chat message.
 type Message struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	// TODO: Add Message-specific fields
+	MessageID  string    `json:"message_id"`
+	OrderID    string    `json:"order_id"`
+	SenderID   string    `json:"sender_id"`
+	Content    string    `json:"content"`
+	Timestamp  time.Time `json:"timestamp"`
+	ReadStatus string    `json:"read_status"` // sent, delivered, read
 }
 
+// SendMessageRequest represents the request to send a message.
+type SendMessageRequest struct {
+	OrderID     string `json:"order_id"`
+	SenderID    string `json:"sender_id"`
+	SenderType  string `json:"sender_type"` // user, driver
+	ReceiverID  string `json:"receiver_id"`
+	MessageText string `json:"message_text"`
+}
+
+// ReadReceiptRequest represents the request to update message read status.
+type ReadReceiptRequest struct {
+	MessageID string `json:"message_id"`
+	OrderID   string `json:"order_id"`
+	Status    string `json:"status"` // delivered, read
+}
+
+// SendMessageResponse represents the response when sending a message.
+type SendMessageResponse struct {
+	MessageID   string    `json:"message_id"`
+	SenderID    string    `json:"sender_id"`
+	MessageText string    `json:"message_text"`
+	Timestamp   time.Time `json:"timestamp"`
+	Status      string    `json:"status"`
+}

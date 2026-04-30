@@ -2,16 +2,20 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"time"
 
 	"furab-backend/services/location-service/internal/handler"
+	"furab-backend/services/location-service/internal/repository"
+	"furab-backend/services/location-service/internal/service"
 	"furab-backend/shared/config"
 	sharedlogger "furab-backend/shared/logger"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -20,6 +24,22 @@ func main() {
 
 	logger.Info("starting location-service", "port", cfg.ServerPort)
 
+	// Setup Redis
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.RedisAddr(),
+		Password: cfg.RedisPassword,
+		DB:       cfg.RedisDB,
+	})
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		log.Fatalf("failed to connect to redis: %v", err)
+	}
+	logger.Info("connected to redis", "addr", cfg.RedisAddr())
+
+	// Setup dependencies
+	repo := repository.NewRedisLocationRepository(rdb)
+	svc := service.NewLocationService(repo)
+	h := handler.NewLocationHandler(svc)
+
 	// Setup router
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
@@ -27,7 +47,6 @@ func main() {
 	r.Use(chimiddleware.Timeout(30 * time.Second))
 
 	// Register routes
-	h := handler.NewLocationHandler()
 	h.RegisterRoutes(r)
 
 	// Start server

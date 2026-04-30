@@ -28,6 +28,12 @@ type Config struct {
 	// RabbitMQ settings
 	RabbitMQURL string
 
+	// Redis settings
+	RedisHost     string
+	RedisPort     int
+	RedisPassword string
+	RedisDB       int
+
 	// JWT settings
 	JWTSecret     string
 	JWTExpiration int // in hours
@@ -53,6 +59,11 @@ func Load(serviceName string) *Config {
 		KafkaBrokers: []string{getEnv("KAFKA_BROKERS", "localhost:9092")},
 
 		RabbitMQURL: getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
+
+		RedisHost:     getEnv("REDIS_HOST", "localhost"),
+		RedisPort:     getEnvInt("REDIS_PORT", 6379),
+		RedisPassword: getEnv("REDIS_PASSWORD", ""),
+		RedisDB:       getEnvInt("REDIS_DB", 0),
 
 		JWTSecret:     getEnv("JWT_SECRET", "furab-default-secret-change-in-production"),
 		JWTExpiration: getEnvInt("JWT_EXPIRATION_HOURS", 24),
@@ -81,6 +92,11 @@ func (c *Config) DatabaseURL() string {
 // ServerAddr returns the full server address (host:port).
 func (c *Config) ServerAddr() string {
 	return fmt.Sprintf("%s:%d", c.ServerHost, c.ServerPort)
+}
+
+// RedisAddr returns the full Redis address (host:port).
+func (c *Config) RedisAddr() string {
+	return fmt.Sprintf("%s:%d", c.RedisHost, c.RedisPort)
 }
 
 // getEnv reads an environment variable or returns a default value.

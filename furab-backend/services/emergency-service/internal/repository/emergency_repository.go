@@ -1,19 +1,15 @@
 // Package repository provides data access layer for emergency-service.
 package repository
 
-import "context"
+import (
+	"context"
+
+	"furab-backend/services/emergency-service/internal/model"
+)
 
 // EmergencyRepository defines the interface for emergency-service data access.
 type EmergencyRepository interface {
-
-	// TriggerSOS performs the TriggerSOS operation.
-	TriggerSOS(ctx context.Context) error
-
-	// GetEmergencyContacts performs the GetEmergencyContacts operation.
-	GetEmergencyContacts(ctx context.Context) error
-
-	// UpdateContacts performs the UpdateContacts operation.
-	UpdateContacts(ctx context.Context) error
+	SaveEmergencyEvent(ctx context.Context, event model.EmergencyEvent) error
 }
 
 // postgresEmergencyRepository implements EmergencyRepository using PostgreSQL.
@@ -24,4 +20,8 @@ type postgresEmergencyRepository struct {
 // NewPostgresEmergencyRepository creates a new PostgreSQL-based repository.
 func NewPostgresEmergencyRepository() EmergencyRepository {
 	return &postgresEmergencyRepository{}
+}
+
+func (r *postgresEmergencyRepository) SaveEmergencyEvent(ctx context.Context, event model.EmergencyEvent) error {
+	return nil
 }
