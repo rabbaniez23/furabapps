@@ -38,39 +38,49 @@ func NewPromoService(repo repository.PromoRepository, orderClient client.OrderCl
 
 func (s *promoServiceImpl) ValidatePromo(ctx context.Context, promoCode, userID, orderID string, totalAmount float64) (*model.PromoValidationResponse, error) {
 	response := &model.PromoValidationResponse{
-		Status:         model.PromoStatusInvalid,
+		IsValid:        false,
 		DiscountAmount: 0,
 		FinalAmount:    totalAmount,
 	}
 
 	if promoCode == "" {
+		response.ErrorMessage = "promo code is required"
 		return response, nil
 	}
 
 	promo, err := s.repo.GetPromoByCode(ctx, promoCode)
 	if err != nil {
-		return response, nil
+		if err == repository.ErrPromoNotFound {
+			response.ErrorMessage = "promo not found or invalid"
+			return response, nil
+		}
+		return nil, fmt.Errorf("failed to get promo: %w", err)
 	}
 
 	if time.Now().After(promo.ExpiryDate) {
+		response.ErrorMessage = "promo has expired"
 		return response, nil
 	}
 
 	if promo.UsageLimit > 0 && promo.UsageCount >= promo.UsageLimit {
+		response.ErrorMessage = "promo usage limit exceeded"
 		return response, nil
 	}
 
 	if totalAmount < promo.MinPurchase {
+		response.ErrorMessage = fmt.Sprintf("minimum purchase not met. minimum: %.2f", promo.MinPurchase)
 		return response, nil
 	}
 
 	orderValid, err := s.orderClient.ValidateOrderPromo(ctx, orderID, promoCode)
 	if err != nil || !orderValid {
+		response.ErrorMessage = "order does not meet promo conditions"
 		return response, nil
 	}
 
 	userValid, err := s.userClient.ValidateUserPromo(ctx, userID, promoCode)
 	if err != nil || !userValid {
+		response.ErrorMessage = "user is not eligible for this promo"
 		return response, nil
 	}
 
@@ -81,10 +91,14 @@ func (s *promoServiceImpl) ValidatePromo(ctx context.Context, promoCode, userID,
 	}
 
 	if err := s.repo.IncrementUsage(ctx, promo.PromoID); err != nil {
-		return nil, err
+		if err == repository.ErrPromoUsageExceeded {
+			response.ErrorMessage = "promo usage limit exceeded"
+			return response, nil
+		}
+		return nil, fmt.Errorf("failed to increment promo usage: %w", err)
 	}
 
-	response.Status = model.PromoStatusValid
+	response.IsValid = true
 	response.DiscountAmount = discountAmount
 	response.FinalAmount = finalAmount
 	return response, nil

@@ -73,7 +73,7 @@ func NewPaymentService(
 }
 
 func (s *paymentServiceImpl) InitiatePayment(ctx context.Context, req *model.InitiatePaymentRequest) (*model.Payment, error) {
-	if req == nil || req.OrderID == "" || req.UserID == "" {
+	if req == nil || req.OrderID == "" || req.UserID == "" || req.PaymentMethod == "" || req.PaymentDetail == "" {
 		return nil, ErrInvalidRequest
 	}
 
@@ -116,6 +116,7 @@ func (s *paymentServiceImpl) InitiatePayment(ctx context.Context, req *model.Ini
 		Amount:               baseAmount,
 		FinalAmount:          finalAmount,
 		MethodID:             req.PaymentMethod,
+		PaymentDetail:        req.PaymentDetail,
 		PaymentStatus:        model.StatusPending,
 		TransactionReference: fmt.Sprintf("TXN-%s", req.OrderID),
 		IdempotencyKey:       req.IdempotencyKey,

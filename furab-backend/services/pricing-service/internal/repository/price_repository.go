@@ -3,7 +3,9 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 
 	"furab-backend/services/pricing-service/internal/model"
 )
@@ -49,17 +51,61 @@ func (r *inMemoryPriceRepository) GetPricingRuleByType(ctx context.Context, rule
 }
 
 type postgresPriceRepository struct {
+	db *sql.DB
 }
 
 // NewPostgresPriceRepository creates a new PostgreSQL-based repository.
-func NewPostgresPriceRepository() PriceRepository {
-	return &postgresPriceRepository{}
+func NewPostgresPriceRepository(db *sql.DB) PriceRepository {
+	return &postgresPriceRepository{db: db}
 }
 
-func (*postgresPriceRepository) GetPricingRules(ctx context.Context) ([]model.PriceRule, error) {
-	return nil, errors.New("postgres price repository not implemented")
+func (r *postgresPriceRepository) GetPricingRules(ctx context.Context) ([]model.PriceRule, error) {
+	query := `
+		SELECT rule_id, type, value, description
+		FROM pricing_rules
+	`
+
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pricing rules: %w", err)
+	}
+	defer rows.Close()
+
+	var rules []model.PriceRule
+	for rows.Next() {
+		var rule model.PriceRule
+		if err := rows.Scan(&rule.RuleID, &rule.Type, &rule.Value, &rule.Description); err != nil {
+			return nil, fmt.Errorf("failed to scan pricing rule: %w", err)
+		}
+		rules = append(rules, rule)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+	return rules, nil
 }
 
-func (*postgresPriceRepository) GetPricingRuleByType(ctx context.Context, ruleType string) (*model.PriceRule, error) {
-	return nil, errors.New("postgres price repository not implemented")
+func (r *postgresPriceRepository) GetPricingRuleByType(ctx context.Context, ruleType string) (*model.PriceRule, error) {
+	query := `
+		SELECT rule_id, type, value, description
+		FROM pricing_rules
+		WHERE type = $1
+		LIMIT 1
+	`
+
+	var rule model.PriceRule
+	err := r.db.QueryRowContext(ctx, query, ruleType).Scan(
+		&rule.RuleID,
+		&rule.Type,
+		&rule.Value,
+		&rule.Description,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrPriceRuleNotFound
+		}
+		return nil, fmt.Errorf("failed to get pricing rule by type: %w", err)
+	}
+	return &rule, nil
 }

@@ -33,7 +33,7 @@ type ProcessSettlementRequest struct {
 }
 
 type ProcessSettlementResponse struct {
-	Status         string  `json:"status"` // Success / Failed
+	Status         string  `json:"status"` // SUCCESS / FAILED
 	DriverAmount   float64 `json:"driver_amount"`
 	MerchantAmount float64 `json:"merchant_amount"`
 	PlatformFee    float64 `json:"platform_fee"`

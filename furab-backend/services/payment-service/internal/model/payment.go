@@ -21,7 +21,8 @@ type Payment struct {
 	UserID               string        `json:"user_id"`
 	Amount               float64       `json:"amount"`
 	FinalAmount          float64       `json:"final_amount"`
-	MethodID             string        `json:"method_id"`
+	MethodID             string        `json:"payment_method"`
+	PaymentDetail        string        `json:"payment_detail"`
 	PaymentStatus        PaymentStatus `json:"payment_status"`
 	TransactionReference string        `json:"transaction_reference"`
 	IdempotencyKey       string        `json:"idempotency_key"`

@@ -1,7 +1,10 @@
 // Package model defines the domain models for promo-service.
 package model
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // PromoValidationRequest is the input payload for promo validation.
 type PromoValidationRequest struct {
@@ -11,9 +14,27 @@ type PromoValidationRequest struct {
 	TotalAmount float64 `json:"total_amount"`
 }
 
+// Validate checks if the request payload is valid.
+func (r *PromoValidationRequest) Validate() error {
+	if r.PromoCode == "" {
+		return errors.New("promo_code is required")
+	}
+	if r.UserID == "" {
+		return errors.New("user_id is required")
+	}
+	if r.OrderID == "" {
+		return errors.New("order_id is required")
+	}
+	if r.TotalAmount < 0 {
+		return errors.New("total_amount cannot be negative")
+	}
+	return nil
+}
+
 // PromoValidationResponse is the response payload for promo validation.
 type PromoValidationResponse struct {
-	Status         string  `json:"status"`
+	IsValid        bool    `json:"is_valid"`
+	ErrorMessage   string  `json:"error_message,omitempty"`
 	DiscountAmount float64 `json:"discount_amount"`
 	FinalAmount    float64 `json:"final_amount"`
 }
@@ -31,8 +52,5 @@ type Promo struct {
 	UsageCount    int       `json:"usage_count"`
 }
 
-const (
-	PromoStatusValid   = "Valid"
-	PromoStatusInvalid = "Invalid"
-)
+
 
