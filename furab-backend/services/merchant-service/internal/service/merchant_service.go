@@ -3,122 +3,87 @@ package service
 import (
 	"context"
 	"errors"
+	"time"
 
 	"furab-backend/services/merchant-service/internal/model"
 	"furab-backend/services/merchant-service/internal/repository"
+	"github.com/google/uuid"
 )
 
-// MerchantService defines the interface for merchant business logic.
+// MerchantService defines the business logic for merchants.
 type MerchantService interface {
-	Create(ctx context.Context, merchant model.Merchant) error
-	Update(ctx context.Context, merchant model.Merchant) error
-	GetByID(ctx context.Context, merchantID string) (model.Merchant, error)
-	UpdateStatus(ctx context.Context, merchantID string, status string) error
-	Deactivate(ctx context.Context, merchantID string) error
-	Search(ctx context.Context, keyword string, kategori string) ([]model.Merchant, error)
-	CheckMerchantStatus(ctx context.Context, merchantID string) (bool, error)
+	CreateMerchant(ctx context.Context, m *model.Merchant) error
+	GetMerchant(ctx context.Context, id string) (*model.Merchant, error)
+	UpdateMerchant(ctx context.Context, m *model.Merchant) error
+	DeleteMerchant(ctx context.Context, id string) error
+	SearchMerchants(ctx context.Context, req model.SearchMerchantRequest) ([]model.Merchant, int, error)
 }
 
-// merchantServiceImpl is the concrete implementation of MerchantService.
-type merchantServiceImpl struct {
+type merchantService struct {
 	repo repository.MerchantRepository
 }
 
-// NewMerchantService creates a new MerchantService.
+// NewMerchantService creates a new instance of merchant service.
 func NewMerchantService(repo repository.MerchantRepository) MerchantService {
-	return &merchantServiceImpl{
-		repo: repo,
-	}
+	return &merchantService{repo: repo}
 }
 
-func (s *merchantServiceImpl) Create(ctx context.Context, merchant model.Merchant) error {
-	if merchant.UserID == "" {
-		return errors.New("user_id tidak boleh kosong")
+func (s *merchantService) CreateMerchant(ctx context.Context, m *model.Merchant) error {
+	if m.Name == "" {
+		return errors.New("merchant name is required")
 	}
-	if merchant.NamaToko == "" {
-		return errors.New("nama toko tidak boleh kosong")
+	if m.Address == "" {
+		return errors.New("merchant address is required")
 	}
-	// Initial default values
-	merchant.IsActive = true
-	if merchant.StatusOperasional == "" {
-		merchant.StatusOperasional = "closed"
-	}
-	return s.repo.Create(ctx, merchant)
+
+	m.ID = uuid.New().String()
+	m.CreatedAt = time.Now()
+	m.UpdatedAt = time.Now()
+	m.Rating = 0
+	m.IsOpen = true
+
+	return s.repo.Save(ctx, m)
 }
 
-func (s *merchantServiceImpl) Update(ctx context.Context, merchant model.Merchant) error {
-	if merchant.NamaToko == "" {
-		return errors.New("nama toko tidak boleh kosong")
+func (s *merchantService) GetMerchant(ctx context.Context, id string) (*model.Merchant, error) {
+	if id == "" {
+		return nil, errors.New("merchant id is required")
 	}
-	return s.repo.Update(ctx, merchant)
+	return s.repo.GetByID(ctx, id)
 }
 
-func (s *merchantServiceImpl) GetByID(ctx context.Context, merchantID string) (model.Merchant, error) {
-	return s.repo.GetByID(ctx, merchantID)
-}
-
-func (s *merchantServiceImpl) UpdateStatus(ctx context.Context, merchantID string, status string) error {
-	if status != "open" && status != "closed" {
-		return errors.New("status tidak valid")
+func (s *merchantService) UpdateMerchant(ctx context.Context, m *model.Merchant) error {
+	if m.ID == "" {
+		return errors.New("merchant id is required")
 	}
 
-	err := s.repo.UpdateStatus(ctx, merchantID, status)
+	existing, err := s.repo.GetByID(ctx, m.ID)
 	if err != nil {
 		return err
 	}
 
-	// Sync dengan cache setelah berhasil di database
-	_ = s.repo.SetStatusCache(ctx, merchantID, status)
+	if m.Name != "" {
+		existing.Name = m.Name
+	}
+	if m.Address != "" {
+		existing.Address = m.Address
+	}
+	if m.Description != "" {
+		existing.Description = m.Description
+	}
+	existing.IsOpen = m.IsOpen
+	existing.UpdatedAt = time.Now()
 
-	return nil
+	return s.repo.Update(ctx, existing)
 }
 
-func (s *merchantServiceImpl) Deactivate(ctx context.Context, merchantID string) error {
-	// 1. Set IsActive = false di database
-	err := s.repo.Deactivate(ctx, merchantID)
-	if err != nil {
-		return err
+func (s *merchantService) DeleteMerchant(ctx context.Context, id string) error {
+	if id == "" {
+		return errors.New("merchant id is required")
 	}
-
-	// 2. Otomatis set StatusOperasional = closed
-	err = s.repo.UpdateStatus(ctx, merchantID, "closed")
-	if err != nil {
-		return err
-	}
-
-	// 3. Update status closed ke Redis/Cache
-	_ = s.repo.SetStatusCache(ctx, merchantID, "closed")
-
-	return nil
+	return s.repo.Delete(ctx, id)
 }
 
-func (s *merchantServiceImpl) Search(ctx context.Context, keyword string, kategori string) ([]model.Merchant, error) {
-	filter := make(map[string]interface{})
-	if keyword != "" {
-		filter["keyword"] = keyword
-	}
-	if kategori != "" {
-		filter["kategori"] = kategori
-	}
-
-	return s.repo.Search(ctx, filter)
-}
-
-func (s *merchantServiceImpl) CheckMerchantStatus(ctx context.Context, merchantID string) (bool, error) {
-	// Optimization: Cek cache terlebih dahulu. 
-	// Jika cache mengatakan closed, return false tanpa ke DB.
-	cachedStatus, err := s.repo.GetStatusCache(ctx, merchantID)
-	if err == nil && cachedStatus == "closed" {
-		return false, nil
-	}
-
-	// Jika tidak di cache atau statusnya open, butuh verifikasi IsActive ke DB
-	merchant, err := s.repo.GetByID(ctx, merchantID)
-	if err != nil {
-		return false, err
-	}
-
-	// Syarat aktif: IsActive == true DAN StatusOperasional == "open"
-	isOpen := merchant.IsActive && merchant.StatusOperasional == "open"
-	return isOpen, nil
+func (s *merchantService) SearchMerchants(ctx context.Context, req model.SearchMerchantRequest) ([]model.Merchant, int, error) {
+	return s.repo.Search(ctx, req)
 }

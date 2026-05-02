@@ -3,101 +3,88 @@ package service
 import (
 	"context"
 	"errors"
+	"time"
 
 	"furab-backend/services/review-service/internal/model"
 	"furab-backend/services/review-service/internal/repository"
+	"github.com/google/uuid"
 )
 
-// ReviewService defines the interface for review business logic.
+// ReviewService defines the business logic for reviews.
 type ReviewService interface {
-	Create(ctx context.Context, review model.Review) error
-	GetByTarget(ctx context.Context, targetID, targetType string, page, limit int) ([]model.Review, int, error)
-	CreateReport(ctx context.Context, report model.ReviewReport) error
-	UpdateStatus(ctx context.Context, reviewID string, status string) error
-	GetHistory(ctx context.Context, userID string, targetType string, page, limit int) ([]model.Review, int, error)
+	CreateReview(ctx context.Context, m *model.Review) error
+	GetReview(ctx context.Context, id string) (*model.Review, error)
+	UpdateReview(ctx context.Context, m *model.Review) error
+	DeleteReview(ctx context.Context, id string) error
+	SearchReviews(ctx context.Context, req model.SearchReviewRequest) ([]model.Review, int, error)
 }
 
-// reviewServiceImpl is the concrete implementation of ReviewService.
-type reviewServiceImpl struct {
+type reviewService struct {
 	repo repository.ReviewRepository
 }
 
-// NewReviewService creates a new ReviewService.
+// NewReviewService creates a new instance of review service.
 func NewReviewService(repo repository.ReviewRepository) ReviewService {
-	return &reviewServiceImpl{
-		repo: repo,
-	}
+	return &reviewService{repo: repo}
 }
 
-// simulateOrderCheck is a dummy method to simulate checking order completion via another service
-func (s *reviewServiceImpl) simulateOrderCheck(orderID string) bool {
-	// Simulasi: jika orderID kosong atau mengandung kata 'invalid', anggap order belum selesai
-	if orderID == "" || orderID == "invalid_order" {
-		return false
+func (s *reviewService) CreateReview(ctx context.Context, m *model.Review) error {
+	if m.UserID == "" {
+		return errors.New("user id is required")
 	}
-	// Default: asumsikan order sudah selesai
-	return true
+	if m.MerchantID == "" {
+		return errors.New("merchant id is required")
+	}
+	if m.OrderID == "" {
+		return errors.New("order id is required")
+	}
+	if m.Rating < 1 || m.Rating > 5 {
+		return errors.New("rating must be between 1 and 5")
+	}
+
+	m.ID = uuid.New().String()
+	m.CreatedAt = time.Now()
+	m.UpdatedAt = time.Now()
+
+	return s.repo.Save(ctx, m)
 }
 
-func (s *reviewServiceImpl) Create(ctx context.Context, review model.Review) error {
-	// 1. Validasi Target Type
-	if review.TargetType != "driver" && review.TargetType != "merchant" {
-		return errors.New("INVALID_TARGET_TYPE")
+func (s *reviewService) GetReview(ctx context.Context, id string) (*model.Review, error) {
+	if id == "" {
+		return nil, errors.New("review id is required")
 	}
-
-	// 2. Simulasi cek status order
-	if !s.simulateOrderCheck(review.OrderID) {
-		return errors.New("ORDER_NOT_COMPLETED")
-	}
-
-	// 3. Cek apakah order ini sudah diulas untuk tipe target yang sama
-	existingReview, err := s.repo.GetByOrderID(ctx, review.OrderID, review.TargetType)
-	// Jika query berhasil dan id terisi, artinya sudah pernah di-review
-	if err == nil && existingReview.ReviewID != "" {
-		return errors.New("ALREADY_REVIEWED")
-	}
-
-	// 4. Set default status jika belum diisi
-	if review.Status == "" {
-		review.Status = "active"
-	}
-
-	return s.repo.Create(ctx, review)
+	return s.repo.GetByID(ctx, id)
 }
 
-func (s *reviewServiceImpl) GetByTarget(ctx context.Context, targetID, targetType string, page, limit int) ([]model.Review, int, error) {
-	// Pagination default fallback
-	if page < 1 {
-		page = 1
+func (s *reviewService) UpdateReview(ctx context.Context, m *model.Review) error {
+	if m.ID == "" {
+		return errors.New("review id is required")
 	}
-	if limit < 1 {
-		limit = 10
-	}
-	return s.repo.GetByTarget(ctx, targetID, targetType, page, limit)
-}
 
-func (s *reviewServiceImpl) CreateReport(ctx context.Context, report model.ReviewReport) error {
-	// 1. Simpan laporan ke database
-	err := s.repo.CreateReport(ctx, report)
+	existing, err := s.repo.GetByID(ctx, m.ID)
 	if err != nil {
 		return err
 	}
 
-	// 2. Ubah status ulasan menjadi 'flagged' sebagai respons pelaporan
-	return s.repo.UpdateStatus(ctx, report.ReviewID, "flagged")
+	if m.Rating < 1 || m.Rating > 5 {
+		return errors.New("rating must be between 1 and 5")
+	}
+
+	existing.Rating = m.Rating
+	existing.Comment = m.Comment
+	existing.ImageURL = m.ImageURL
+	existing.UpdatedAt = time.Now()
+
+	return s.repo.Update(ctx, existing)
 }
 
-func (s *reviewServiceImpl) UpdateStatus(ctx context.Context, reviewID string, status string) error {
-	return s.repo.UpdateStatus(ctx, reviewID, status)
+func (s *reviewService) DeleteReview(ctx context.Context, id string) error {
+	if id == "" {
+		return errors.New("review id is required")
+	}
+	return s.repo.Delete(ctx, id)
 }
 
-func (s *reviewServiceImpl) GetHistory(ctx context.Context, userID string, targetType string, page, limit int) ([]model.Review, int, error) {
-	// Pagination default fallback
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 {
-		limit = 10
-	}
-	return s.repo.GetHistory(ctx, userID, targetType, page, limit)
+func (s *reviewService) SearchReviews(ctx context.Context, req model.SearchReviewRequest) ([]model.Review, int, error) {
+	return s.repo.Search(ctx, req)
 }

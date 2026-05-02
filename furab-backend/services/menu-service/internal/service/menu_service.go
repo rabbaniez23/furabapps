@@ -3,104 +3,95 @@ package service
 import (
 	"context"
 	"errors"
+	"time"
 
 	"furab-backend/services/menu-service/internal/model"
 	"furab-backend/services/menu-service/internal/repository"
+	"github.com/google/uuid"
 )
 
-// MenuService defines the interface for menu-service business logic.
+// MenuService defines the business logic for menus.
 type MenuService interface {
-	Create(ctx context.Context, menu model.Menu) error
-	Update(ctx context.Context, menu model.Menu) error
-	Delete(ctx context.Context, menuID string) error
-	UpdateStock(ctx context.Context, menuID string, jumlah int) error
-	GetByID(ctx context.Context, menuID string) (model.Menu, error)
-	ListByMerchant(ctx context.Context, merchantID string) ([]model.Menu, error)
-	SetAvailability(ctx context.Context, menuID string, status bool) error
+	CreateMenu(ctx context.Context, m *model.Menu) error
+	GetMenu(ctx context.Context, id string) (*model.Menu, error)
+	UpdateMenu(ctx context.Context, m *model.Menu) error
+	DeleteMenu(ctx context.Context, id string) error
+	SearchMenus(ctx context.Context, req model.SearchMenuRequest) ([]model.Menu, int, error)
 }
 
-// menuServiceImpl is the concrete implementation of MenuService.
-type menuServiceImpl struct {
+type menuService struct {
 	repo repository.MenuRepository
 }
 
-// NewMenuService creates a new MenuService.
+// NewMenuService creates a new instance of menu service.
 func NewMenuService(repo repository.MenuRepository) MenuService {
-	return &menuServiceImpl{
-		repo: repo,
-	}
+	return &menuService{repo: repo}
 }
 
-// validateMenu performs basic validation on Menu data.
-func (s *menuServiceImpl) validateMenu(menu model.Menu) error {
-	if menu.NamaMenu == "" {
-		return errors.New("nama menu tidak boleh kosong")
+func (s *menuService) CreateMenu(ctx context.Context, m *model.Menu) error {
+	if m.MerchantID == "" {
+		return errors.New("merchant id is required")
 	}
-	if menu.Harga < 0 {
-		return errors.New("harga tidak boleh negatif")
+	if m.Name == "" {
+		return errors.New("menu name is required")
 	}
-	return nil
+	if m.Price <= 0 {
+		return errors.New("price must be greater than zero")
+	}
+
+	m.ID = uuid.New().String()
+	m.CreatedAt = time.Now()
+	m.UpdatedAt = time.Now()
+	m.IsAvailable = true
+
+	return s.repo.Save(ctx, m)
 }
 
-func (s *menuServiceImpl) Create(ctx context.Context, menu model.Menu) error {
-	if err := s.validateMenu(menu); err != nil {
-		return err
+func (s *menuService) GetMenu(ctx context.Context, id string) (*model.Menu, error) {
+	if id == "" {
+		return nil, errors.New("menu id is required")
 	}
-	return s.repo.Create(ctx, menu)
+	return s.repo.GetByID(ctx, id)
 }
 
-func (s *menuServiceImpl) Update(ctx context.Context, menu model.Menu) error {
-	if err := s.validateMenu(menu); err != nil {
-		return err
+func (s *menuService) UpdateMenu(ctx context.Context, m *model.Menu) error {
+	if m.ID == "" {
+		return errors.New("menu id is required")
 	}
-	return s.repo.Update(ctx, menu)
-}
 
-func (s *menuServiceImpl) Delete(ctx context.Context, menuID string) error {
-	return s.repo.Delete(ctx, menuID)
-}
-
-func (s *menuServiceImpl) UpdateStock(ctx context.Context, menuID string, jumlah int) error {
-	// 1. Dapatkan menu saat ini untuk mengecek stok
-	menu, err := s.repo.GetByID(ctx, menuID)
+	existing, err := s.repo.GetByID(ctx, m.ID)
 	if err != nil {
 		return err
 	}
 
-	// 2. Kalkulasi stok baru (jumlah diasumsikan sebagai delta: positif untuk tambah, negatif untuk kurangi)
-	newStock := menu.Stok + jumlah
-
-	// 3. Validasi stok tidak boleh negatif
-	if newStock < 0 {
-		return errors.New("insufficient stock")
+	if m.Name != "" {
+		existing.Name = m.Name
 	}
-
-	// 4. Update stok ke database melalui repository
-	err = s.repo.UpdateStock(ctx, menuID, jumlah)
-	if err != nil {
-		return err
+	if m.Description != "" {
+		existing.Description = m.Description
 	}
-
-	// 5. UX Enhancement: Auto-set availability
-	if newStock == 0 {
-		// Jika stok habis, otomatis set ketersediaan menjadi false
-		_ = s.repo.SetAvailability(ctx, menuID, false)
-	} else if menu.Stok == 0 && newStock > 0 {
-		// Jika stok sebelumnya habis lalu diisi kembali, otomatis set menjadi true
-		_ = s.repo.SetAvailability(ctx, menuID, true)
+	if m.Price > 0 {
+		existing.Price = m.Price
 	}
+	if m.Category != "" {
+		existing.Category = m.Category
+	}
+	if m.ImageURL != "" {
+		existing.ImageURL = m.ImageURL
+	}
+	existing.IsAvailable = m.IsAvailable
+	existing.UpdatedAt = time.Now()
 
-	return nil
+	return s.repo.Update(ctx, existing)
 }
 
-func (s *menuServiceImpl) GetByID(ctx context.Context, menuID string) (model.Menu, error) {
-	return s.repo.GetByID(ctx, menuID)
+func (s *menuService) DeleteMenu(ctx context.Context, id string) error {
+	if id == "" {
+		return errors.New("menu id is required")
+	}
+	return s.repo.Delete(ctx, id)
 }
 
-func (s *menuServiceImpl) ListByMerchant(ctx context.Context, merchantID string) ([]model.Menu, error) {
-	return s.repo.ListByMerchant(ctx, merchantID)
-}
-
-func (s *menuServiceImpl) SetAvailability(ctx context.Context, menuID string, status bool) error {
-	return s.repo.SetAvailability(ctx, menuID, status)
+func (s *menuService) SearchMenus(ctx context.Context, req model.SearchMenuRequest) ([]model.Menu, int, error) {
+	return s.repo.Search(ctx, req)
 }
