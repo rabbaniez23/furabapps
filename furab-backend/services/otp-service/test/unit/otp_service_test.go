@@ -13,194 +13,241 @@ import (
 	"furab-backend/services/otp-service/internal/service"
 )
 
-// =======================
-// 1. GENERATE OTP
-// =======================
+var (
+	errRepoSave = errors.New("repo save error")
+	errRepoFind = errors.New("repo find error")
+)
 
-func TestGenerateOTP_Success(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockRepo := mock_repository.NewMockOTPRepository(ctrl)
-
-	mockRepo.EXPECT().
-		Save(gomock.Any(), gomock.Any()).
-		Return(nil)
-
-	svc := service.NewOTPService(mockRepo)
-
-	res, err := svc.GenerateOTP(context.Background(), service.GenerateOTPRequest{
-		Contact: "08123",
-	})
-
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if res.Message != "OTP generated" {
-		t.Errorf("expected message 'OTP generated', got %s", res.Message)
-	}
+type otpArgMatcher struct {
+	match func(*model.OTP) bool
 }
 
-func TestGenerateOTP_InputKosong(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockRepo := mock_repository.NewMockOTPRepository(ctrl)
-
-	svc := service.NewOTPService(mockRepo)
-
-	_, err := svc.GenerateOTP(context.Background(), service.GenerateOTPRequest{
-		Contact: "",
-	})
-
-	if err == nil || !errors.Is(err, service.ErrValidation) {
-		t.Fatalf("expected validation error, got %v", err)
+func (m otpArgMatcher) Matches(x any) bool {
+	o, ok := x.(*model.OTP)
+	if !ok {
+		return false
 	}
+	return m.match(o)
 }
 
-func TestGenerateOTP_RepositoryError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockRepo := mock_repository.NewMockOTPRepository(ctrl)
-
-	mockRepo.EXPECT().
-		Save(gomock.Any(), gomock.Any()).
-		Return(errors.New("db error"))
-
-	svc := service.NewOTPService(mockRepo)
-
-	_, err := svc.GenerateOTP(context.Background(), service.GenerateOTPRequest{
-		Contact: "08123",
-	})
-
-	if err == nil || err.Error() != "db error" {
-		t.Fatalf("expected db error, got %v", err)
-	}
+func (m otpArgMatcher) String() string {
+	return "matches *model.OTP predicate"
 }
 
-// =======================
-// 2. VERIFY OTP
-// =======================
+func matchOTP(match func(*model.OTP) bool) gomock.Matcher {
+	return otpArgMatcher{match: match}
+}
 
-func TestVerifyOTP_Success(t *testing.T) {
+func setupOTPService(t *testing.T) (*gomock.Controller, *mock_repository.MockOTPRepository, service.OTPService) {
+	t.Helper()
 	ctrl := gomock.NewController(t)
+	mockRepo := mock_repository.NewMockOTPRepository(ctrl)
+	return ctrl, mockRepo, service.NewOTPService(mockRepo)
+}
+
+func TestOTPService_GenerateOTP(t *testing.T) {
+	ctrl, mockRepo, svc := setupOTPService(t)
 	defer ctrl.Finish()
 
-	mockRepo := mock_repository.NewMockOTPRepository(ctrl)
+	t.Run("success", func(t *testing.T) {
+		now := time.Now().Unix()
+		mockRepo.EXPECT().
+			Save(gomock.Any(), matchOTP(func(o *model.OTP) bool {
+				// Phone trimmed + dummy code + expiry in the future.
+				return o != nil && o.Phone == "08123" && o.Code == "123456" && o.ExpiresAt > now
+			})).
+			Return(nil)
 
-	mockRepo.EXPECT().
-		FindByPhone(gomock.Any(), "08123").
-		Return(&model.OTP{
+		res, err := svc.GenerateOTP(context.Background(), service.GenerateOTPRequest{
+			Contact: " 08123 ",
+		})
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if res == nil {
+			t.Fatal("expected non-nil response")
+		}
+		if res.OTPCode == "" {
+			t.Fatal("expected non-empty OTPCode")
+		}
+	})
+
+	t.Run("validation_error_contact_required", func(t *testing.T) {
+		res, err := svc.GenerateOTP(context.Background(), service.GenerateOTPRequest{
+			Contact: " ",
+		})
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, service.ErrContactRequired) {
+			t.Fatalf("expected ErrContactRequired, got %v", err)
+		}
+	})
+
+	t.Run("repository_error_save", func(t *testing.T) {
+		mockRepo.EXPECT().
+			Save(gomock.Any(), matchOTP(func(o *model.OTP) bool {
+				return o != nil && o.Phone == "08123" && o.Code == "123456"
+			})).
+			Return(errRepoSave)
+
+		res, err := svc.GenerateOTP(context.Background(), service.GenerateOTPRequest{
+			Contact: "08123",
+		})
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, errRepoSave) {
+			t.Fatalf("expected repo save error, got %v", err)
+		}
+	})
+
+	t.Run("context_cancelled", func(t *testing.T) {
+		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		res, err := svc.GenerateOTP(cancelledCtx, service.GenerateOTPRequest{
+			Contact: "08123",
+		})
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	})
+}
+
+func TestOTPService_VerifyOTP(t *testing.T) {
+	ctrl, mockRepo, svc := setupOTPService(t)
+	defer ctrl.Finish()
+
+	t.Run("success", func(t *testing.T) {
+		mockRepo.EXPECT().FindByPhone(gomock.Any(), "08123").Return(&model.OTP{
 			Phone:     "08123",
 			Code:      "123456",
 			ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
 		}, nil)
 
-	svc := service.NewOTPService(mockRepo)
-
-	res, err := svc.VerifyOTP(context.Background(), service.VerifyOTPRequest{
-		Contact: "08123",
-		Code:    "123456",
+		res, err := svc.VerifyOTP(context.Background(), service.VerifyOTPRequest{
+			Contact: " 08123 ",
+			Code:    " 123456 ",
+		})
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if res == nil || !res.Valid {
+			t.Fatalf("expected valid response, got %#v", res)
+		}
 	})
 
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
+	t.Run("validation_error_contact_required", func(t *testing.T) {
+		res, err := svc.VerifyOTP(context.Background(), service.VerifyOTPRequest{
+			Contact: " ",
+			Code:    "123456",
+		})
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, service.ErrContactRequired) {
+			t.Fatalf("expected ErrContactRequired, got %v", err)
+		}
+	})
 
-	if res.Message != "OTP valid" {
-		t.Errorf("expected message 'OTP valid', got %s", res.Message)
-	}
-	if !res.Valid {
-		t.Errorf("expected Valid to be true")
-	}
-}
+	t.Run("validation_error_otp_required", func(t *testing.T) {
+		res, err := svc.VerifyOTP(context.Background(), service.VerifyOTPRequest{
+			Contact: "08123",
+			Code:    " ",
+		})
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, service.ErrOTPRequired) {
+			t.Fatalf("expected ErrOTPRequired, got %v", err)
+		}
+	})
 
-func TestVerifyOTP_InvalidOTP(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	t.Run("business_error_not_found", func(t *testing.T) {
+		mockRepo.EXPECT().FindByPhone(gomock.Any(), "99999").Return(nil, nil)
 
-	mockRepo := mock_repository.NewMockOTPRepository(ctrl)
+		res, err := svc.VerifyOTP(context.Background(), service.VerifyOTPRequest{
+			Contact: "99999",
+			Code:    "123456",
+		})
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, service.ErrOTPNotFound) {
+			t.Fatalf("expected ErrOTPNotFound, got %v", err)
+		}
+	})
 
-	mockRepo.EXPECT().
-		FindByPhone(gomock.Any(), "08123").
-		Return(&model.OTP{
+	t.Run("business_error_invalid_code", func(t *testing.T) {
+		mockRepo.EXPECT().FindByPhone(gomock.Any(), "08123").Return(&model.OTP{
 			Phone:     "08123",
 			Code:      "123456",
 			ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
 		}, nil)
 
-	svc := service.NewOTPService(mockRepo)
-
-	res, err := svc.VerifyOTP(context.Background(), service.VerifyOTPRequest{
-		Contact: "08123",
-		Code:    "000000",
+		res, err := svc.VerifyOTP(context.Background(), service.VerifyOTPRequest{
+			Contact: "08123",
+			Code:    "000000",
+		})
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, service.ErrOTPInvalid) {
+			t.Fatalf("expected ErrOTPInvalid, got %v", err)
+		}
 	})
 
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if res.Message != "OTP invalid" {
-		t.Errorf("expected message 'OTP invalid', got %s", res.Message)
-	}
-	if res.Valid {
-		t.Errorf("expected Valid to be false")
-	}
-}
-
-func TestVerifyOTP_Expired(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockRepo := mock_repository.NewMockOTPRepository(ctrl)
-
-	mockRepo.EXPECT().
-		FindByPhone(gomock.Any(), "08123").
-		Return(&model.OTP{
+	t.Run("business_error_expired", func(t *testing.T) {
+		mockRepo.EXPECT().FindByPhone(gomock.Any(), "08123").Return(&model.OTP{
 			Phone:     "08123",
 			Code:      "123456",
 			ExpiresAt: time.Now().Add(-5 * time.Minute).Unix(),
 		}, nil)
 
-	svc := service.NewOTPService(mockRepo)
-
-	res, err := svc.VerifyOTP(context.Background(), service.VerifyOTPRequest{
-		Contact: "08123",
-		Code:    "123456",
+		res, err := svc.VerifyOTP(context.Background(), service.VerifyOTPRequest{
+			Contact: "08123",
+			Code:    "123456",
+		})
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, service.ErrOTPExpired) {
+			t.Fatalf("expected ErrOTPExpired, got %v", err)
+		}
 	})
 
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
+	t.Run("repository_error_find_by_phone", func(t *testing.T) {
+		mockRepo.EXPECT().FindByPhone(gomock.Any(), "08123").Return(nil, errRepoFind)
 
-	if res.Message != "OTP expired" {
-		t.Errorf("expected message 'OTP expired', got %s", res.Message)
-	}
-	if res.Valid {
-		t.Errorf("expected Valid to be false")
-	}
-}
-
-func TestVerifyOTP_NotFound(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockRepo := mock_repository.NewMockOTPRepository(ctrl)
-
-	mockRepo.EXPECT().
-		FindByPhone(gomock.Any(), "99999").
-		Return(nil, nil)
-
-	svc := service.NewOTPService(mockRepo)
-
-	_, err := svc.VerifyOTP(context.Background(), service.VerifyOTPRequest{
-		Contact: "99999",
-		Code:    "123456",
+		res, err := svc.VerifyOTP(context.Background(), service.VerifyOTPRequest{
+			Contact: "08123",
+			Code:    "123456",
+		})
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, errRepoFind) {
+			t.Fatalf("expected repo find error, got %v", err)
+		}
 	})
 
-	if err == nil || !errors.Is(err, service.ErrOTPNotFound) {
-		t.Fatalf("expected otp not found, got %v", err)
-	}
+	t.Run("context_cancelled", func(t *testing.T) {
+		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		res, err := svc.VerifyOTP(cancelledCtx, service.VerifyOTPRequest{
+			Contact: "08123",
+			Code:    "123456",
+		})
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	})
 }
