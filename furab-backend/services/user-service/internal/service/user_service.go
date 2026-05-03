@@ -1,4 +1,3 @@
-// Package service implements the business logic for user-service.
 package service
 
 import (
@@ -10,6 +9,12 @@ import (
 )
 
 type User = model.User
+
+// ✅ Define error biar konsisten & profesional
+var (
+	ErrValidation   = errors.New("validation error")
+	ErrUserNotFound = errors.New("user not found")
+)
 
 type CreateUserRequest struct {
 	UserID string
@@ -41,27 +46,42 @@ type UserService interface {
 	DeactivateUser(ctx context.Context, userID string) error
 }
 
-// userServiceImpl is the concrete implementation of UserService.
 type userServiceImpl struct {
 	repo repository.UserRepository
 }
 
-// NewUserService creates a new UserService.
 func NewUserService(repo repository.UserRepository) UserService {
 	return &userServiceImpl{repo: repo}
 }
 
-func (s *userServiceImpl) GetProfile(ctx context.Context) error { return nil }
-func (s *userServiceImpl) UpdateProfile(ctx context.Context) error { return nil }
-func (s *userServiceImpl) AddAddress(ctx context.Context) error { return nil }
-func (s *userServiceImpl) DeleteAddress(ctx context.Context) error { return nil }
+// =======================
+// UNUSED (boleh kasih TODO)
+// =======================
+func (s *userServiceImpl) GetProfile(ctx context.Context) error {
+	// TODO: implement
+	return nil
+}
+func (s *userServiceImpl) UpdateProfile(ctx context.Context) error {
+	// TODO: implement
+	return nil
+}
+func (s *userServiceImpl) AddAddress(ctx context.Context) error {
+	// TODO: implement
+	return nil
+}
+func (s *userServiceImpl) DeleteAddress(ctx context.Context) error {
+	// TODO: implement
+	return nil
+}
+
+// =======================
+// CORE LOGIC
+// =======================
 
 func (s *userServiceImpl) CreateUser(ctx context.Context, req CreateUserRequest) (*CreateUserResponse, error) {
-	if req.Email == "" {
-		return nil, errors.New("email required")
-	}
-	if req.Name == "" {
-		return nil, errors.New("validation error")
+	// ✅ Validasi dirapikan (konsisten)
+	if req.Email == "" || req.Name == "" {
+		return nil, ErrValidation
 	}
 
 	user := &User{
@@ -75,7 +95,10 @@ func (s *userServiceImpl) CreateUser(ctx context.Context, req CreateUserRequest)
 		return nil, err
 	}
 
-	return &CreateUserResponse{UserID: user.UserID, Message: "sukses"}, nil
+	return &CreateUserResponse{
+		UserID:  user.UserID,
+		Message: "sukses",
+	}, nil
 }
 
 func (s *userServiceImpl) GetUser(ctx context.Context, userID string) (*User, error) {
@@ -84,7 +107,7 @@ func (s *userServiceImpl) GetUser(ctx context.Context, userID string) (*User, er
 		return nil, err
 	}
 	if user == nil {
-		return nil, errors.New("user not found")
+		return nil, ErrUserNotFound
 	}
 	return user, nil
 }
@@ -95,17 +118,23 @@ func (s *userServiceImpl) UpdateUser(ctx context.Context, userID string, req Upd
 		return err
 	}
 	if user == nil {
-		return errors.New("user not found")
+		return ErrUserNotFound
 	}
+
 	user.Name = req.Name
 	user.Email = req.Email
+
 	return s.repo.Update(ctx, user)
 }
 
 func (s *userServiceImpl) DeactivateUser(ctx context.Context, userID string) error {
-	_, err := s.repo.FindByID(ctx, userID)
+	user, err := s.repo.FindByID(ctx, userID)
 	if err != nil {
 		return err
 	}
+	if user == nil {
+		return ErrUserNotFound
+	}
+
 	return s.repo.Deactivate(ctx, userID)
 }

@@ -13,7 +13,9 @@ import (
 	"furab-backend/services/otp-service/internal/service"
 )
 
-// 1. Generate OTP
+// =======================
+// 1. GENERATE OTP
+// =======================
 
 func TestGenerateOTP_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -52,8 +54,8 @@ func TestGenerateOTP_InputKosong(t *testing.T) {
 		Contact: "",
 	})
 
-	if err == nil || err.Error() != "phone/email required" {
-		t.Fatalf("expected error 'phone/email required', got %v", err)
+	if err == nil || !errors.Is(err, service.ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
 	}
 }
 
@@ -74,11 +76,13 @@ func TestGenerateOTP_RepositoryError(t *testing.T) {
 	})
 
 	if err == nil || err.Error() != "db error" {
-		t.Fatalf("expected 'db error', got %v", err)
+		t.Fatalf("expected db error, got %v", err)
 	}
 }
 
-// 2. Verify OTP
+// =======================
+// 2. VERIFY OTP
+// =======================
 
 func TestVerifyOTP_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -196,7 +200,7 @@ func TestVerifyOTP_NotFound(t *testing.T) {
 		Code:    "123456",
 	})
 
-	if err == nil || err.Error() != "otp not found" {
-		t.Fatalf("expected 'otp not found' error, got %v", err)
+	if err == nil || !errors.Is(err, service.ErrOTPNotFound) {
+		t.Fatalf("expected otp not found, got %v", err)
 	}
 }

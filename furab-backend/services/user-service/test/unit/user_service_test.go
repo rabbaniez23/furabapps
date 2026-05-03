@@ -12,7 +12,9 @@ import (
 	"furab-backend/services/user-service/internal/service"
 )
 
+// =======================
 // 1. CREATE USER
+// =======================
 
 func TestCreateUser_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -58,8 +60,8 @@ func TestCreateUser_EmailEmpty(t *testing.T) {
 		Email: "",
 	})
 
-	if err == nil || err.Error() != "email required" {
-		t.Fatalf("expected error 'email required', got %v", err)
+	if err == nil || !errors.Is(err, service.ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
 	}
 }
 
@@ -76,7 +78,7 @@ func TestCreateUser_DataTidakLengkap(t *testing.T) {
 		Email: "erv@mail.com",
 	})
 
-	if err == nil || err.Error() != "validation error" {
+	if err == nil || !errors.Is(err, service.ErrValidation) {
 		t.Fatalf("expected validation error, got %v", err)
 	}
 }
@@ -104,7 +106,9 @@ func TestCreateUser_RepositoryError(t *testing.T) {
 	}
 }
 
+// =======================
 // 2. GET USER
+// =======================
 
 func TestGetUser_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -143,8 +147,8 @@ func TestGetUser_NotFound(t *testing.T) {
 
 	_, err := svc.GetUser(context.Background(), "99")
 
-	if err == nil || err.Error() != "user not found" {
-		t.Fatalf("expected 'user not found' error, got %v", err)
+	if err == nil || !errors.Is(err, service.ErrUserNotFound) {
+		t.Fatalf("expected user not found, got %v", err)
 	}
 }
 
@@ -163,11 +167,13 @@ func TestGetUser_RepositoryError(t *testing.T) {
 	_, err := svc.GetUser(context.Background(), "1")
 
 	if err == nil || err.Error() != "db error" {
-		t.Fatalf("expected 'db error', got %v", err)
+		t.Fatalf("expected db error, got %v", err)
 	}
 }
 
+// =======================
 // 3. UPDATE USER
+// =======================
 
 func TestUpdateUser_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -212,8 +218,8 @@ func TestUpdateUser_NotFound(t *testing.T) {
 		Email: "updated@mail.com",
 	})
 
-	if err == nil || err.Error() != "user not found" {
-		t.Fatalf("expected 'user not found' error, got %v", err)
+	if err == nil || !errors.Is(err, service.ErrUserNotFound) {
+		t.Fatalf("expected user not found, got %v", err)
 	}
 }
 
@@ -243,7 +249,9 @@ func TestUpdateUser_RepositoryError(t *testing.T) {
 	}
 }
 
+// =======================
 // 4. DEACTIVATE USER
+// =======================
 
 func TestDeactivateUser_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -265,6 +273,25 @@ func TestDeactivateUser_Success(t *testing.T) {
 
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestDeactivateUser_NotFound(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockRepo := mock_repository.NewMockUserRepository(ctrl)
+
+	mockRepo.EXPECT().
+		FindByID(gomock.Any(), "99").
+		Return(nil, nil)
+
+	svc := service.NewUserService(mockRepo)
+
+	err := svc.DeactivateUser(context.Background(), "99")
+
+	if err == nil || !errors.Is(err, service.ErrUserNotFound) {
+		t.Fatalf("expected user not found, got %v", err)
 	}
 }
 

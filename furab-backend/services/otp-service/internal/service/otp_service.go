@@ -1,4 +1,3 @@
-// Package service implements the business logic for otp-service.
 package service
 
 import (
@@ -11,6 +10,12 @@ import (
 )
 
 type OTP = model.OTP
+
+// ✅ Error variable (best practice)
+var (
+	ErrValidation = errors.New("validation error")
+	ErrOTPNotFound = errors.New("otp not found")
+)
 
 type GenerateOTPRequest struct {
 	Contact string
@@ -31,30 +36,27 @@ type VerifyOTPResponse struct {
 	Message string
 }
 
-// OTPService defines the interface for otp-service business logic.
 type OTPService interface {
 	GenerateOTP(ctx context.Context, req GenerateOTPRequest) (*GenerateOTPResponse, error)
 	VerifyOTP(ctx context.Context, req VerifyOTPRequest) (*VerifyOTPResponse, error)
 }
 
-// otpServiceImpl is the concrete implementation of OTPService.
 type otpServiceImpl struct {
 	repo repository.OTPRepository
 }
 
-// NewOTPService creates a new OTPService.
 func NewOTPService(repo repository.OTPRepository) OTPService {
 	return &otpServiceImpl{repo: repo}
 }
 
 func (s *otpServiceImpl) GenerateOTP(ctx context.Context, req GenerateOTPRequest) (*GenerateOTPResponse, error) {
 	if req.Contact == "" {
-		return nil, errors.New("phone/email required")
+		return nil, ErrValidation
 	}
 
 	otp := &OTP{
 		Phone:     req.Contact,
-		Code:      "123456",
+		Code:      "123456", // TODO: generate random OTP
 		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
 	}
 
@@ -74,7 +76,7 @@ func (s *otpServiceImpl) VerifyOTP(ctx context.Context, req VerifyOTPRequest) (*
 		return nil, err
 	}
 	if otp == nil {
-		return nil, errors.New("otp not found")
+		return nil, ErrOTPNotFound
 	}
 
 	if otp.Code != req.Code {
