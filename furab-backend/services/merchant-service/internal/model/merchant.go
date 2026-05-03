@@ -2,19 +2,21 @@ package model
 
 import "time"
 
-// Merchant represents a shop/store owner in the system.
+// Merchant represents the merchant entity in the system.
 type Merchant struct {
-	MerchantID        string    `json:"merchant_id"`
-	UserID            string    `json:"user_id"`
-	NamaToko          string    `json:"nama_toko"`
-	Alamat            string    `json:"alamat"`
-	Latitude          float64   `json:"latitude"`
-	Longitude         float64   `json:"longitude"`
-	Kategori          string    `json:"kategori"`
-	JamBuka           string    `json:"jam_buka"`
-	JamTutup          string    `json:"jam_tutup"`
-	StatusOperasional string    `json:"status_operasional"` // "open" or "closed"
-	IsActive          bool      `json:"is_active"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Address     string    `json:"address"`
+	Description string    `json:"description"`
+	Rating      float64   `json:"rating"`
+	IsOpen      bool      `json:"is_open"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// SearchMerchantRequest represents the criteria for searching merchants.
+type SearchMerchantRequest struct {
+	Query  string `json:"query"`
+	Limit  int    `json:"limit"`
+	Offset int    `json:"offset"`
 }

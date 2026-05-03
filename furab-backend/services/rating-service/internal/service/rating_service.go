@@ -1,72 +1,89 @@
-// Package service implements the business logic for rating-service.
 package service
 
 import (
 	"context"
 	"errors"
+	"time"
 
 	"furab-backend/services/rating-service/internal/model"
 	"furab-backend/services/rating-service/internal/repository"
+	"github.com/google/uuid"
 )
 
-// RatingService defines the interface for rating-service business logic.
+// RatingService defines the business logic for ratings.
 type RatingService interface {
-	SubmitRating(ctx context.Context, rating model.Rating) error
-	GetStatistics(ctx context.Context, targetID, targetType string) (model.RatingSummary, error)
-	GetHistory(ctx context.Context, reviewerID string, page, limit int) ([]model.Rating, int, error)
+	CreateRating(ctx context.Context, m *model.Rating) error
+	GetRating(ctx context.Context, id string) (*model.Rating, error)
+	UpdateRating(ctx context.Context, m *model.Rating) error
+	DeleteRating(ctx context.Context, id string) error
+	SearchRatings(ctx context.Context, req model.SearchRatingRequest) ([]model.Rating, int, error)
 }
 
-// ratingServiceImpl is the concrete implementation of RatingService.
-type ratingServiceImpl struct {
+type ratingService struct {
 	repo repository.RatingRepository
 }
 
-// NewRatingService creates a new RatingService.
+// NewRatingService creates a new instance of rating service.
 func NewRatingService(repo repository.RatingRepository) RatingService {
-	return &ratingServiceImpl{
-		repo: repo,
-	}
+	return &ratingService{repo: repo}
 }
 
-// SubmitRating validates, checks for duplicates, saves rating and updates statistics.
-func (s *ratingServiceImpl) SubmitRating(ctx context.Context, rating model.Rating) error {
-	// 1. Validasi Score harus 1-5
-	if rating.Score < 1 || rating.Score > 5 {
-		return errors.New("INVALID_SCORE")
+func (s *ratingService) CreateRating(ctx context.Context, m *model.Rating) error {
+	if m.UserID == "" {
+		return errors.New("user id is required")
+	}
+	if m.TargetID == "" {
+		return errors.New("target id is required")
+	}
+	if m.TargetType == "" {
+		return errors.New("target type is required")
+	}
+	if m.Score < 1 || m.Score > 5 {
+		return errors.New("score must be between 1 and 5")
 	}
 
-	// 2. Panggil CheckDuplicate
-	isDuplicate, _, err := s.repo.CheckDuplicate(ctx, rating.ReviewerID, rating.TargetID, rating.TargetType, rating.OrderID)
+	m.ID = uuid.New().String()
+	m.CreatedAt = time.Now()
+	m.UpdatedAt = time.Now()
+
+	return s.repo.Save(ctx, m)
+}
+
+func (s *ratingService) GetRating(ctx context.Context, id string) (*model.Rating, error) {
+	if id == "" {
+		return nil, errors.New("rating id is required")
+	}
+	return s.repo.GetByID(ctx, id)
+}
+
+func (s *ratingService) UpdateRating(ctx context.Context, m *model.Rating) error {
+	if m.ID == "" {
+		return errors.New("rating id is required")
+	}
+
+	existing, err := s.repo.GetByID(ctx, m.ID)
 	if err != nil {
 		return err
 	}
 
-	if isDuplicate {
-		return errors.New("ALREADY_RATED")
+	if m.Score < 1 || m.Score > 5 {
+		return errors.New("score must be between 1 and 5")
 	}
 
-	// 3. Simpan ke repository
-	err = s.repo.SaveRating(ctx, rating)
-	if err != nil {
-		return err
-	}
+	existing.Score = m.Score
+	existing.Comment = m.Comment
+	existing.UpdatedAt = time.Now()
 
-	// 4. UpdateStatistics untuk memperbarui rating_summary
-	return s.repo.UpdateStatistics(ctx, rating.TargetID, rating.TargetType, rating.Score)
+	return s.repo.Update(ctx, existing)
 }
 
-// GetStatistics mengambil data dari rating_summary
-func (s *ratingServiceImpl) GetStatistics(ctx context.Context, targetID, targetType string) (model.RatingSummary, error) {
-	return s.repo.GetStatistics(ctx, targetID, targetType)
+func (s *ratingService) DeleteRating(ctx context.Context, id string) error {
+	if id == "" {
+		return errors.New("rating id is required")
+	}
+	return s.repo.Delete(ctx, id)
 }
 
-// GetHistory mengambil daftar rating dengan sistem pagination
-func (s *ratingServiceImpl) GetHistory(ctx context.Context, reviewerID string, page, limit int) ([]model.Rating, int, error) {
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 {
-		limit = 10
-	}
-	return s.repo.GetHistory(ctx, reviewerID, page, limit)
+func (s *ratingService) SearchRatings(ctx context.Context, req model.SearchRatingRequest) ([]model.Rating, int, error) {
+	return s.repo.Search(ctx, req)
 }
