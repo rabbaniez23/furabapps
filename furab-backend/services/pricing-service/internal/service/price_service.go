@@ -12,7 +12,8 @@ import (
 )
 
 var (
-	ErrOrderIDRequired = errors.New("order id is required")
+	ErrInvalidRequest = errors.New("invalid request")
+	ErrMissingDependency = errors.New("missing dependency")
 	ErrNoOrderItems   = errors.New("order contains no items")
 )
 
@@ -39,7 +40,10 @@ func NewPriceService(repo repository.PriceRepository, orderClient client.OrderCl
 
 func (s *priceServiceImpl) CalculatePrice(ctx context.Context, orderID string) (*model.PriceCalculationResponse, error) {
 	if orderID == "" {
-		return nil, ErrOrderIDRequired
+		return nil, ErrInvalidRequest
+	}
+	if s.repo == nil || s.orderClient == nil || s.locationClient == nil {
+		return nil, ErrMissingDependency
 	}
 
 	items, err := s.orderClient.GetOrderItems(ctx, orderID)

@@ -42,9 +42,14 @@ func (h *PromoHandler) ValidatePromo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := req.Validate(); err != nil {
+		utils.ErrorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	result, err := h.service.ValidatePromo(r.Context(), req.PromoCode, req.UserID, req.OrderID, req.TotalAmount)
 	if err != nil {
-		utils.ErrorResponse(w, http.StatusInternalServerError, "failed to validate promo")
+		utils.ErrorResponse(w, http.StatusInternalServerError, "failed to validate promo: "+err.Error())
 		return
 	}
 

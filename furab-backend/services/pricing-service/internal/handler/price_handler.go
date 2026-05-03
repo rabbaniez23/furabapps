@@ -24,12 +24,7 @@ func NewPriceHandler(svc service.PriceService) *PriceHandler {
 // RegisterRoutes registers all pricing-service routes.
 func (h *PriceHandler) RegisterRoutes(r chi.Router) {
 	r.Route("/api/v1/prices", func(r chi.Router) {
-		r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-			utils.SuccessResponse(w, http.StatusOK, map[string]string{
-				"status":  "healthy",
-				"service": "pricing-service",
-			})
-		})
+		r.Get("/health", HealthCheck)
 		r.Get("/{orderID}", h.GetPriceEstimate)
 	})
 }
@@ -45,7 +40,7 @@ func (h *PriceHandler) GetPriceEstimate(w http.ResponseWriter, r *http.Request) 
 	response, err := h.service.CalculatePrice(r.Context(), orderID)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrOrderIDRequired):
+		case errors.Is(err, service.ErrInvalidRequest):
 			utils.ErrorResponse(w, http.StatusBadRequest, err.Error())
 		default:
 			utils.ErrorResponse(w, http.StatusInternalServerError, "failed to calculate price")
@@ -54,4 +49,12 @@ func (h *PriceHandler) GetPriceEstimate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	utils.SuccessResponse(w, http.StatusOK, response)
+}
+
+// HealthCheck handles GET /health.
+func HealthCheck(w http.ResponseWriter, r *http.Request) {
+	utils.SuccessResponse(w, http.StatusOK, map[string]string{
+		"status":  "healthy",
+		"service": "pricing-service",
+	})
 }
