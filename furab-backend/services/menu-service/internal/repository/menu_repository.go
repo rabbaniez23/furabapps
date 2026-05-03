@@ -1,33 +1,57 @@
-// Package repository provides data access layer for menu-service.
 package repository
 
-import "context"
+import (
+	"context"
 
-// MenuRepository defines the interface for menu-service data access.
+	"furab-backend/services/menu-service/internal/model"
+)
+
+// MenuRepository defines the interface for menu data operations.
 type MenuRepository interface {
-
-	// GetMenu performs the GetMenu operation.
-	GetMenu(ctx context.Context) error
-
-	// AddItem performs the AddItem operation.
-	AddItem(ctx context.Context) error
-
-	// UpdateItem performs the UpdateItem operation.
-	UpdateItem(ctx context.Context) error
-
-	// DeleteItem performs the DeleteItem operation.
-	DeleteItem(ctx context.Context) error
-
-	// GetCategories performs the GetCategories operation.
-	GetCategories(ctx context.Context) error
+	Create(ctx context.Context, menu model.Menu) error
+	Update(ctx context.Context, menu model.Menu) error
+	Delete(ctx context.Context, menuID string) error
+	UpdateStock(ctx context.Context, menuID string, jumlah int) error
+	GetByID(ctx context.Context, menuID string) (model.Menu, error)
+	ListByMerchant(ctx context.Context, merchantID string) ([]model.Menu, error)
+	SetAvailability(ctx context.Context, menuID string, status bool) error
 }
 
-// postgresMenuRepository implements MenuRepository using PostgreSQL.
+// postgresMenuRepository is a dummy implementation of MenuRepository
 type postgresMenuRepository struct {
-	// TODO: add *sql.DB field
+	// TODO: add *sql.DB field or other connection dependency
 }
 
-// NewPostgresMenuRepository creates a new PostgreSQL-based repository.
+// NewPostgresMenuRepository creates a new postgresMenuRepository
 func NewPostgresMenuRepository() MenuRepository {
 	return &postgresMenuRepository{}
+}
+
+// Dummy methods to satisfy the MenuRepository interface
+func (r *postgresMenuRepository) Create(ctx context.Context, menu model.Menu) error {
+	return nil
+}
+
+func (r *postgresMenuRepository) Update(ctx context.Context, menu model.Menu) error {
+	return nil
+}
+
+func (r *postgresMenuRepository) Delete(ctx context.Context, menuID string) error {
+	return nil
+}
+
+func (r *postgresMenuRepository) UpdateStock(ctx context.Context, menuID string, jumlah int) error {
+	return nil
+}
+
+func (r *postgresMenuRepository) GetByID(ctx context.Context, menuID string) (model.Menu, error) {
+	return model.Menu{}, nil
+}
+
+func (r *postgresMenuRepository) ListByMerchant(ctx context.Context, merchantID string) ([]model.Menu, error) {
+	return nil, nil
+}
+
+func (r *postgresMenuRepository) SetAvailability(ctx context.Context, menuID string, status bool) error {
+	return nil
 }

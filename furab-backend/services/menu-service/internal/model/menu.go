@@ -1,29 +1,17 @@
-// Package model defines the domain models for menu-service.
 package model
 
 import "time"
 
-// Menu represents the Menu model in menu-service.
+// Menu represents a menu item offered by a merchant.
 type Menu struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	// TODO: Add Menu-specific fields
+	MenuID      string    `json:"menu_id"`
+	MerchantID  string    `json:"merchant_id"`
+	NamaMenu    string    `json:"nama_menu"`
+	Harga       float64   `json:"harga"`
+	Kategori    string    `json:"kategori"`
+	Deskripsi   string    `json:"deskripsi"`
+	Stok        int       `json:"stok"`
+	IsAvailable bool      `json:"is_available"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
-
-// MenuItem represents the MenuItem model in menu-service.
-type MenuItem struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	// TODO: Add MenuItem-specific fields
-}
-
-// Category represents the Category model in menu-service.
-type Category struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	// TODO: Add Category-specific fields
-}
-

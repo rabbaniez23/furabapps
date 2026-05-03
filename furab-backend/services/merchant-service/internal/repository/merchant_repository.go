@@ -1,30 +1,62 @@
-// Package repository provides data access layer for merchant-service.
 package repository
 
-import "context"
+import (
+	"context"
 
-// MerchantRepository defines the interface for merchant-service data access.
+	"furab-backend/services/merchant-service/internal/model"
+)
+
+// MerchantRepository defines the interface for merchant data operations.
 type MerchantRepository interface {
-
-	// Register performs the Register operation.
-	Register(ctx context.Context) error
-
-	// GetMerchant performs the GetMerchant operation.
-	GetMerchant(ctx context.Context) error
-
-	// UpdateProfile performs the UpdateProfile operation.
-	UpdateProfile(ctx context.Context) error
-
-	// SetOperatingHours performs the SetOperatingHours operation.
-	SetOperatingHours(ctx context.Context) error
+	Create(ctx context.Context, merchant model.Merchant) error
+	Update(ctx context.Context, merchant model.Merchant) error
+	GetByID(ctx context.Context, merchantID string) (model.Merchant, error)
+	UpdateStatus(ctx context.Context, merchantID string, status string) error
+	Deactivate(ctx context.Context, merchantID string) error
+	Search(ctx context.Context, filter map[string]interface{}) ([]model.Merchant, error)
+	SetStatusCache(ctx context.Context, merchantID string, status string) error
+	GetStatusCache(ctx context.Context, merchantID string) (string, error)
 }
 
-// postgresMerchantRepository implements MerchantRepository using PostgreSQL.
+// postgresMerchantRepository is a dummy implementation of MerchantRepository.
+// It is useful to satisfy interfaces during development.
 type postgresMerchantRepository struct {
-	// TODO: add *sql.DB field
+	// TODO: add connection pool or cache dependencies
 }
 
-// NewPostgresMerchantRepository creates a new PostgreSQL-based repository.
+// NewPostgresMerchantRepository creates a new postgresMerchantRepository.
 func NewPostgresMerchantRepository() MerchantRepository {
 	return &postgresMerchantRepository{}
+}
+
+func (r *postgresMerchantRepository) Create(ctx context.Context, merchant model.Merchant) error {
+	return nil
+}
+
+func (r *postgresMerchantRepository) Update(ctx context.Context, merchant model.Merchant) error {
+	return nil
+}
+
+func (r *postgresMerchantRepository) GetByID(ctx context.Context, merchantID string) (model.Merchant, error) {
+	return model.Merchant{}, nil
+}
+
+func (r *postgresMerchantRepository) UpdateStatus(ctx context.Context, merchantID string, status string) error {
+	return nil
+}
+
+func (r *postgresMerchantRepository) Deactivate(ctx context.Context, merchantID string) error {
+	return nil
+}
+
+func (r *postgresMerchantRepository) Search(ctx context.Context, filter map[string]interface{}) ([]model.Merchant, error) {
+	return nil, nil
+}
+
+func (r *postgresMerchantRepository) SetStatusCache(ctx context.Context, merchantID string, status string) error {
+	return nil
+}
+
+func (r *postgresMerchantRepository) GetStatusCache(ctx context.Context, merchantID string) (string, error) {
+	return "", nil
 }
