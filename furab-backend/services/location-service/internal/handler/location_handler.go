@@ -54,7 +54,7 @@ func (h *LocationHandler) UpdateLocation(w http.ResponseWriter, r *http.Request)
 		req.Timestamp = time.Now()
 	}
 
-	if err := h.service.UpdateLocation(r.Context(), req); err != nil {
+	if err := h.service.UpdateDriverLocation(r.Context(), req); err != nil {
 		utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to update location")
 		return
 	}
@@ -74,7 +74,7 @@ func (h *LocationHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.UpdateStatus(r.Context(), req); err != nil {
+	if err := h.service.UpdateDriverStatus(r.Context(), req); err != nil {
 		utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to update status")
 		return
 	}
@@ -109,7 +109,7 @@ func (h *LocationHandler) SearchNearbyDrivers(w http.ResponseWriter, r *http.Req
 		Radius:          radius,
 	}
 
-	drivers, err := h.service.SearchNearbyDrivers(r.Context(), req)
+	drivers, err := h.service.FindNearbyDrivers(r.Context(), req)
 	if err != nil {
 		utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to search drivers")
 		return
@@ -125,7 +125,7 @@ func (h *LocationHandler) TrackDriver(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	loc, err := h.service.TrackDriver(r.Context(), driverID)
+	loc, err := h.service.GetDriverLocation(r.Context(), driverID, "")
 	if err != nil {
 		utils.ErrorResponse(w, http.StatusNotFound, "Driver location not found")
 		return

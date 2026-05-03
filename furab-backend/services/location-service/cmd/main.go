@@ -18,6 +18,13 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// dummyDriverClient implements service.DriverServiceClient for standalone testing/running
+type dummyDriverClient struct{}
+
+func (d *dummyDriverClient) ValidateDriver(ctx context.Context, driverID string) (bool, error) {
+	return true, nil // Always valid for now
+}
+
 func main() {
 	cfg := config.Load("location-service")
 	logger := sharedlogger.New(cfg.ServiceName, cfg.Environment)
@@ -37,7 +44,8 @@ func main() {
 
 	// Setup dependencies
 	repo := repository.NewRedisLocationRepository(rdb)
-	svc := service.NewLocationService(repo)
+	driverClient := &dummyDriverClient{}
+	svc := service.NewLocationService(repo, driverClient)
 	h := handler.NewLocationHandler(svc)
 
 	// Setup router

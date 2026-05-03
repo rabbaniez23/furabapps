@@ -9,43 +9,61 @@ import (
 	"furab-backend/services/location-service/internal/repository"
 )
 
+// DriverServiceClient defines the interface for communicating with DriverService.
+type DriverServiceClient interface {
+	ValidateDriver(ctx context.Context, driverID string) (bool, error)
+}
+
 // LocationService defines the interface for location-service business logic.
 type LocationService interface {
-	UpdateLocation(ctx context.Context, req model.UpdateLocationRequest) error
-	UpdateStatus(ctx context.Context, req model.UpdateStatusRequest) error
-	SearchNearbyDrivers(ctx context.Context, req model.SearchDriverRequest) ([]model.DriverLocationResponse, error)
-	TrackDriver(ctx context.Context, driverID string) (*model.TrackLocationResponse, error)
+	UpdateDriverLocation(ctx context.Context, req model.UpdateLocationRequest) error
+	UpdateDriverStatus(ctx context.Context, req model.UpdateStatusRequest) error
+	FindNearbyDrivers(ctx context.Context, req model.SearchDriverRequest) ([]model.DriverLocationResponse, error)
+	GetDriverLocation(ctx context.Context, driverID, orderID string) (*model.TrackLocationResponse, error)
+	GetEmergencyLocation(ctx context.Context, driverID, orderID, actorType string) (*model.TrackLocationResponse, error)
 }
 
 // locationServiceImpl is the concrete implementation of LocationService.
 type locationServiceImpl struct {
-	repo repository.LocationRepository
+	repo         repository.LocationRepository
+	driverClient DriverServiceClient
 }
 
 // NewLocationService creates a new LocationService.
-func NewLocationService(repo repository.LocationRepository) LocationService {
+func NewLocationService(repo repository.LocationRepository, driverClient DriverServiceClient) LocationService {
 	return &locationServiceImpl{
-		repo: repo,
+		repo:         repo,
+		driverClient: driverClient,
 	}
 }
 
-func (s *locationServiceImpl) UpdateLocation(ctx context.Context, req model.UpdateLocationRequest) error {
-	if req.Latitude < -90 || req.Latitude > 90 || req.Longitude < -180 || req.Longitude > 180 {
-		return errors.New("invalid coordinate")
+func (s *locationServiceImpl) UpdateDriverLocation(ctx context.Context, req model.UpdateLocationRequest) error {
+	if req.DriverID == "" {
+		return errors.New("driver_id is required")
 	}
+
+	valid, err := s.driverClient.ValidateDriver(ctx, req.DriverID)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return errors.New("invalid driver")
+	}
+
 	return s.repo.UpdateLocation(ctx, req)
 }
 
-func (s *locationServiceImpl) UpdateStatus(ctx context.Context, req model.UpdateStatusRequest) error {
-	if req.DriverStatus != "available" && req.DriverStatus != "busy" {
-		return errors.New("invalid status")
+func (s *locationServiceImpl) UpdateDriverStatus(ctx context.Context, req model.UpdateStatusRequest) error {
+	if req.DriverID == "" {
+		return errors.New("driver_id is required")
 	}
+
 	return s.repo.UpdateStatus(ctx, req)
 }
 
-func (s *locationServiceImpl) SearchNearbyDrivers(ctx context.Context, req model.SearchDriverRequest) ([]model.DriverLocationResponse, error) {
-	if req.LatitudeOrigin < -90 || req.LatitudeOrigin > 90 || req.LongitudeOrigin < -180 || req.LongitudeOrigin > 180 || req.Radius <= 0 {
-		return nil, errors.New("invalid input")
+func (s *locationServiceImpl) FindNearbyDrivers(ctx context.Context, req model.SearchDriverRequest) ([]model.DriverLocationResponse, error) {
+	if req.Radius <= 0 {
+		return nil, errors.New("invalid radius")
 	}
 
 	geos, err := s.repo.SearchNearbyDrivers(ctx, req)
@@ -57,16 +75,14 @@ func (s *locationServiceImpl) SearchNearbyDrivers(ctx context.Context, req model
 	for _, geo := range geos {
 		driverID := geo.Name
 
-		// Check if active (TTL exists)
 		isActive, err := s.repo.IsDriverActive(ctx, driverID)
 		if err != nil || !isActive {
 			continue // skip inactive drivers
 		}
 
-		// Check status (available/busy)
 		status, err := s.repo.GetStatus(ctx, driverID)
-		if err != nil || status == "busy" {
-			continue // skip busy drivers
+		if err != nil || status != "available" {
+			continue // skip non-available drivers
 		}
 
 		results = append(results, model.DriverLocationResponse{
@@ -78,9 +94,35 @@ func (s *locationServiceImpl) SearchNearbyDrivers(ctx context.Context, req model
 		})
 	}
 
+	if results == nil {
+		return []model.DriverLocationResponse{}, nil
+	}
+
 	return results, nil
 }
 
-func (s *locationServiceImpl) TrackDriver(ctx context.Context, driverID string) (*model.TrackLocationResponse, error) {
-	return s.repo.TrackDriver(ctx, driverID)
+func (s *locationServiceImpl) GetDriverLocation(ctx context.Context, driverID, orderID string) (*model.TrackLocationResponse, error) {
+	if driverID == "" {
+		return nil, errors.New("driver_id is required")
+	}
+
+	res, err := s.repo.TrackDriver(ctx, driverID)
+	if err != nil {
+		return nil, err
+	}
+
+	return res, nil
+}
+
+func (s *locationServiceImpl) GetEmergencyLocation(ctx context.Context, driverID, orderID, actorType string) (*model.TrackLocationResponse, error) {
+	if driverID == "" {
+		return nil, errors.New("driver_id is required")
+	}
+
+	res, err := s.repo.TrackDriver(ctx, driverID)
+	if err != nil {
+		return nil, err
+	}
+
+	return res, nil
 }

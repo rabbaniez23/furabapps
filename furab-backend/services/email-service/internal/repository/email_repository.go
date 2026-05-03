@@ -11,6 +11,8 @@ import (
 type EmailRepository interface {
 	// SaveEmailLog stores email delivery result for monitoring/audit.
 	SaveEmailLog(ctx context.Context, log model.EmailLog) error
+	// GetTemplateByID fetches an email template by ID.
+	GetTemplateByID(ctx context.Context, templateID string) (*model.EmailTemplate, error)
 }
 
 // postgresEmailRepository implements EmailRepository using PostgreSQL.
@@ -29,4 +31,12 @@ func (r *postgresEmailRepository) SaveEmailLog(ctx context.Context, log model.Em
 	_ = log
 	// TODO: implement database persistence.
 	return nil
+}
+
+// GetTemplateByID fetches a template by ID from database.
+func (r *postgresEmailRepository) GetTemplateByID(ctx context.Context, templateID string) (*model.EmailTemplate, error) {
+	_ = ctx
+	_ = templateID
+	// TODO: implement database persistence.
+	return nil, nil
 }
