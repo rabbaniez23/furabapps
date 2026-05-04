@@ -14,6 +14,8 @@ services:
       POSTGRES_MULTIPLE_DATABASES: >
         ride_order_service,
         food_order_service,
+        cart_service,
+        matching_service,
         auth_service,
         user_service,
         driver_service,

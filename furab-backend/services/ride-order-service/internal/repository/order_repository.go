@@ -13,38 +13,20 @@ import (
 
 // Common repository errors.
 var (
-	ErrOrderNotFound = errors.New("order not found")
+	ErrOrderNotFound  = errors.New("order not found")
 	ErrDuplicateOrder = errors.New("duplicate order")
 )
 
 // OrderRepository defines the interface for ride order data access.
-// This interface is used for dependency injection and can be mocked in unit tests.
 type OrderRepository interface {
-	// Create inserts a new ride order into the database.
 	Create(ctx context.Context, order *model.RideOrder) error
-
-	// GetByID retrieves a ride order by its ID.
 	GetByID(ctx context.Context, id string) (*model.RideOrder, error)
-
-	// Update updates an existing ride order.
 	Update(ctx context.Context, order *model.RideOrder) error
-
-	// UpdateStatus updates only the status of a ride order.
 	UpdateStatus(ctx context.Context, id string, status model.RideStatus) error
-
-	// AssignDriver assigns a driver to a ride order.
 	AssignDriver(ctx context.Context, orderID, driverID string) error
-
-	// GetByUserID retrieves all ride orders for a specific user.
 	GetByUserID(ctx context.Context, userID string, limit, offset int) ([]*model.RideOrder, error)
-
-	// GetByDriverID retrieves all ride orders for a specific driver.
 	GetByDriverID(ctx context.Context, driverID string, limit, offset int) ([]*model.RideOrder, error)
-
-	// CountByUserID counts the total number of orders for a user.
 	CountByUserID(ctx context.Context, userID string) (int, error)
-
-	// Delete removes a ride order (soft delete optional).
 	Delete(ctx context.Context, id string) error
 }
 
@@ -65,16 +47,18 @@ func (r *postgresOrderRepository) Create(ctx context.Context, order *model.RideO
 			id, user_id, driver_id, 
 			pickup_lat, pickup_lng, pickup_address,
 			dropoff_lat, dropoff_lng, dropoff_address,
-			status, fare, distance, estimated_duration,
+			status, payment_status, fare, distance, estimated_duration,
+			cancelled_by, cancel_reason,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`
 
 	_, err := r.db.ExecContext(ctx, query,
-		order.ID, order.UserID, order.DriverID,
+		order.ID, order.UserID, nullString(order.DriverID),
 		order.PickupLocation.Latitude, order.PickupLocation.Longitude, order.PickupLocation.Address,
 		order.DropoffLocation.Latitude, order.DropoffLocation.Longitude, order.DropoffLocation.Address,
-		order.Status, order.Fare, order.Distance, order.EstimatedDuration,
+		order.Status, order.PaymentStatus, order.Fare, order.Distance, order.EstimatedDuration,
+		nullString(order.CancelledBy), nullString(order.CancelReason),
 		order.CreatedAt, order.UpdatedAt,
 	)
 	if err != nil {
@@ -89,20 +73,23 @@ func (r *postgresOrderRepository) GetByID(ctx context.Context, id string) (*mode
 		SELECT id, user_id, driver_id,
 			pickup_lat, pickup_lng, pickup_address,
 			dropoff_lat, dropoff_lng, dropoff_address,
-			status, fare, distance, estimated_duration,
+			status, payment_status, fare, distance, estimated_duration,
+			cancelled_by, cancel_reason,
 			created_at, updated_at
 		FROM ride_orders
 		WHERE id = $1
 	`
 
 	order := &model.RideOrder{}
-	var driverID sql.NullString
+	var driverID, cancelledBy, cancelReason sql.NullString
+	var paymentStatus sql.NullString
 
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
 		&order.ID, &order.UserID, &driverID,
 		&order.PickupLocation.Latitude, &order.PickupLocation.Longitude, &order.PickupLocation.Address,
 		&order.DropoffLocation.Latitude, &order.DropoffLocation.Longitude, &order.DropoffLocation.Address,
-		&order.Status, &order.Fare, &order.Distance, &order.EstimatedDuration,
+		&order.Status, &paymentStatus, &order.Fare, &order.Distance, &order.EstimatedDuration,
+		&cancelledBy, &cancelReason,
 		&order.CreatedAt, &order.UpdatedAt,
 	)
 	if err != nil {
@@ -115,6 +102,15 @@ func (r *postgresOrderRepository) GetByID(ctx context.Context, id string) (*mode
 	if driverID.Valid {
 		order.DriverID = driverID.String
 	}
+	if paymentStatus.Valid {
+		order.PaymentStatus = model.PaymentStatus(paymentStatus.String)
+	}
+	if cancelledBy.Valid {
+		order.CancelledBy = cancelledBy.String
+	}
+	if cancelReason.Valid {
+		order.CancelReason = cancelReason.String
+	}
 
 	return order, nil
 }
@@ -125,17 +121,21 @@ func (r *postgresOrderRepository) Update(ctx context.Context, order *model.RideO
 		UPDATE ride_orders SET
 			driver_id = $2,
 			status = $3,
-			fare = $4,
-			distance = $5,
-			estimated_duration = $6,
-			updated_at = $7
+			payment_status = $4,
+			fare = $5,
+			distance = $6,
+			estimated_duration = $7,
+			cancelled_by = $8,
+			cancel_reason = $9,
+			updated_at = $10
 		WHERE id = $1
 	`
 
 	order.UpdatedAt = time.Now().UTC()
 	result, err := r.db.ExecContext(ctx, query,
-		order.ID, order.DriverID, order.Status,
-		order.Fare, order.Distance, order.EstimatedDuration,
+		order.ID, nullString(order.DriverID), order.Status,
+		order.PaymentStatus, order.Fare, order.Distance, order.EstimatedDuration,
+		nullString(order.CancelledBy), nullString(order.CancelReason),
 		order.UpdatedAt,
 	)
 	if err != nil {
@@ -205,7 +205,8 @@ func (r *postgresOrderRepository) GetByUserID(ctx context.Context, userID string
 		SELECT id, user_id, driver_id,
 			pickup_lat, pickup_lng, pickup_address,
 			dropoff_lat, dropoff_lng, dropoff_address,
-			status, fare, distance, estimated_duration,
+			status, payment_status, fare, distance, estimated_duration,
+			cancelled_by, cancel_reason,
 			created_at, updated_at
 		FROM ride_orders
 		WHERE user_id = $1
@@ -228,7 +229,8 @@ func (r *postgresOrderRepository) GetByDriverID(ctx context.Context, driverID st
 		SELECT id, user_id, driver_id,
 			pickup_lat, pickup_lng, pickup_address,
 			dropoff_lat, dropoff_lng, dropoff_address,
-			status, fare, distance, estimated_duration,
+			status, payment_status, fare, distance, estimated_duration,
+			cancelled_by, cancel_reason,
 			created_at, updated_at
 		FROM ride_orders
 		WHERE driver_id = $1
@@ -275,18 +277,21 @@ func (r *postgresOrderRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// scanOrders is a helper to scan multiple rows into RideOrder slices.
+// --- Helpers ---
+
+// scanOrders scans multiple rows into RideOrder slices.
 func (r *postgresOrderRepository) scanOrders(rows *sql.Rows) ([]*model.RideOrder, error) {
 	var orders []*model.RideOrder
 	for rows.Next() {
 		order := &model.RideOrder{}
-		var driverID sql.NullString
+		var driverID, cancelledBy, cancelReason, paymentStatus sql.NullString
 
 		err := rows.Scan(
 			&order.ID, &order.UserID, &driverID,
 			&order.PickupLocation.Latitude, &order.PickupLocation.Longitude, &order.PickupLocation.Address,
 			&order.DropoffLocation.Latitude, &order.DropoffLocation.Longitude, &order.DropoffLocation.Address,
-			&order.Status, &order.Fare, &order.Distance, &order.EstimatedDuration,
+			&order.Status, &paymentStatus, &order.Fare, &order.Distance, &order.EstimatedDuration,
+			&cancelledBy, &cancelReason,
 			&order.CreatedAt, &order.UpdatedAt,
 		)
 		if err != nil {
@@ -295,6 +300,15 @@ func (r *postgresOrderRepository) scanOrders(rows *sql.Rows) ([]*model.RideOrder
 
 		if driverID.Valid {
 			order.DriverID = driverID.String
+		}
+		if paymentStatus.Valid {
+			order.PaymentStatus = model.PaymentStatus(paymentStatus.String)
+		}
+		if cancelledBy.Valid {
+			order.CancelledBy = cancelledBy.String
+		}
+		if cancelReason.Valid {
+			order.CancelReason = cancelReason.String
 		}
 
 		orders = append(orders, order)
@@ -305,4 +319,12 @@ func (r *postgresOrderRepository) scanOrders(rows *sql.Rows) ([]*model.RideOrder
 	}
 
 	return orders, nil
+}
+
+// nullString converts a string to sql.NullString for nullable columns.
+func nullString(s string) sql.NullString {
+	if s == "" {
+		return sql.NullString{Valid: false}
+	}
+	return sql.NullString{String: s, Valid: true}
 }

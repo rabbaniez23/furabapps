@@ -1,85 +1,210 @@
-﻿# Location Service -join ' ')
+# 🛰️ Location Service
 
-Real-time location tracking service
+## 📌 Deskripsi
+Location Service merupakan microservice yang bertanggung jawab dalam mengelola lokasi driver secara real-time serta status ketersediaan driver untuk mendukung proses matching dan tracking dalam layanan ride.
 
-## Deskripsi
+Service ini digunakan pada dua proses utama:
+- **Matching** → menyediakan kandidat driver terdekat
+- **Tracking** → menampilkan posisi driver saat perjalanan (PICKING_UP dan ON_THE_WAY)
 
-TODO: Tambahkan deskripsi lengkap service ini.
+Selain itu, service ini juga mengelola status driver:
+- **available** → dapat menerima order
+- **busy** → tidak ikut matching, tetapi tetap bisa di-track
 
-## Tech Stack
+---
 
-| Komponen | Teknologi |
-|----------|-----------|
-| Language | Go 1.22+ |
-| HTTP Router | chi |
-| Database | PostgreSQL |
-| Testing | gomock, go test |
+# 📥 Input
 
-## Struktur Folder
+## 1. Update Lokasi Driver
+| Field        | Tipe     |
+|--------------|----------|
+| driver_id    | string   |
+| latitude     | float    |
+| longitude    | float    |
+| timestamp    | datetime |
 
-```
-location-service/
-+-- cmd/main.go
-+-- internal/
-    +-- handler/location_handler.go
-    +-- service/location_service.go
-    +-- repository/location_repository.go
-    +-- model/location.go
-+-- test/
-    +-- unit/location_service_test.go
-    +-- unit/mock/
-    +-- functional/location_functional_test.go
-+-- go.mod
-+-- Dockerfile
-+-- README.md
-```
+---
 
-## Cara Menjalankan
+## 2. Update Status Driver
+| Field          | Tipe   |
+|----------------|--------|
+| driver_id      | string |
+| driver_status  | string |
 
-```bash
-# Set environment variables
-export SERVER_PORT=8080
-export DB_HOST=localhost
-export DB_PORT=5432
-export DB_USER=furab
-export DB_PASSWORD=furab_secret
-export DB_NAME=location-service
+Keterangan:
+- `available` → ikut matching
+- `busy` → tidak ikut matching
 
-# Jalankan service
-go run cmd/main.go
-```
+---
 
-## Menjalankan Tests
+## 3. Pencarian Driver
+| Field             | Tipe  |
+|------------------|-------|
+| latitude_origin  | float |
+| longitude_origin | float |
+| radius           | float |
 
-### Unit Tests (Tanpa Database)
-```bash
-go test ./test/unit/... -v
-```
+---
 
-**Test BERHASIL jika output:**
-```
---- PASS: TestNewLocationService_Creation
-PASS
-```
+## 4. Request Tracking Lokasi
+| Field     | Tipe   |
+|-----------|--------|
+| driver_id | string |
+| order_id  | string |
 
-**Test GAGAL jika output:**
-```
---- FAIL: TestNewLocationService_Creation
-FAIL
-```
+---
 
-### Functional Tests (Dengan Database)
-```bash
-# Pastikan PostgreSQL berjalan
-go test ./test/functional/... -v -tags=functional
-```
+📌 **Catatan:**  
+Pada food delivery, pencarian driver menggunakan lokasi merchant sebagai titik origin.
 
-## Docker
+---
 
-```bash
-# Build (dari root project)
-docker build -t furab/location-service:latest -f services/location-service/Dockerfile .
+# 📤 Output
 
-# Run
-docker run -p 8080:8080 furab/location-service:latest
-```
+## 1. Hasil Pencarian Driver
+| Field         | Tipe   |
+|---------------|--------|
+| driver_id     | string |
+| latitude      | float  |
+| longitude     | float  |
+| distance      | float  |
+| driver_status | string |
+
+---
+
+## 2. Data Tracking Lokasi
+| Field     | Tipe     |
+|-----------|----------|
+| driver_id | string   |
+| latitude  | float    |
+| longitude | float    |
+| timestamp | datetime |
+
+---
+
+## 3. Response Sistem
+| Field   | Tipe   |
+|---------|--------|
+| status  | string |
+| message | string |
+
+---
+
+# 🗄️ Data
+
+## 1. driver_location
+Menyimpan lokasi driver secara real-time.
+
+| Field       | Tipe     |
+|-------------|----------|
+| driver_id   | string   |
+| latitude    | float    |
+| longitude   | float    |
+| timestamp   | datetime |
+| expiry_time | TTL      |
+
+---
+
+## 2. driver_status
+Menyimpan status driver.
+
+| Field         | Tipe   |
+|---------------|--------|
+| driver_id     | string |
+| driver_status | string |
+
+---
+
+# ⚙️ Mekanisme Penyimpanan
+
+- Menggunakan **Redis (in-memory)**
+- Menggunakan **Geo-index** untuk pencarian radius
+- Data diperbarui secara berkala
+- Data lama akan expired (TTL)
+- Driver dengan status **busy** tidak masuk hasil pencarian
+
+---
+
+# 🧠 State Management
+
+Location Service bersifat **stateless**, artinya:
+- Tidak menyimpan session user
+- Setiap request diproses secara independen
+- Data disimpan di Redis
+
+---
+
+# 🔗 Interaksi dengan Microservices
+
+- **Driver Service**  
+  Validasi driver yang mengirim lokasi
+
+- **Matching Service**  
+  Mengambil kandidat driver dan mengubah status driver menjadi busy saat accept order
+
+- **Merchant Service**  
+  Menyediakan lokasi merchant sebagai titik origin (food delivery)
+
+- **Ride Order Service**  
+  - Menggunakan data lokasi untuk tracking  
+  - Mengubah status driver menjadi available saat order selesai  
+
+---
+
+# 📊 Asumsi Load
+
+| Proses             | Request Rate        |
+|--------------------|-------------------|
+| Update lokasi      | ±1000 req/detik   |
+| Pencarian driver   | ±500 req/detik    |
+| Tracking lokasi    | ±500–800 req/detik|
+
+---
+
+# 🧪 Testing Strategy
+
+## 🔹 Unit Test
+- Tidak menggunakan Redis
+- Menggunakan mock repository
+- Fokus pada:
+  - Validasi input
+  - Logic service
+
+---
+
+## 🔹 Functional Test
+- Menggunakan Redis / in-memory DB
+- Menguji flow:
+  - Update lokasi
+  - Matching driver
+  - Tracking
+
+---
+
+## 🔹 Integration Test
+- Tanpa mock
+- Menggunakan Redis asli / TestContainer
+- Menguji:
+  - Penyimpanan data
+  - Geo query (radius search)
+
+---
+
+# ⚙️ Pipeline Testing
+
+1. Checkout Repository  
+2. Unit Test → `go test ./...`  
+3. Lint/Vet → `go vet ./...`  
+4. Build Image → `docker build`  
+5. Functional Test  
+6. Push Image  
+7. Deploy ke Kubernetes  
+8. Verify Service  
+
+---
+
+# 📌 Catatan
+
+- Unit test akan tetap berjalan meskipun implementasi belum lengkap
+- Functional test dapat gagal karena sistem belum fully implemented
+- Fokus utama adalah struktur dan pendekatan testing
