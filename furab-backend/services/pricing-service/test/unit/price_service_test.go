@@ -16,51 +16,29 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-type fakeOrderClient struct {
-	items []model.OrderItem
-	err   error
-}
-
-func (f *fakeOrderClient) GetOrderItems(ctx context.Context, orderID string) ([]model.OrderItem, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.items, nil
-}
-
-type fakeLocationClient struct {
-	distance float64
-	err      error
-}
-
-func (f *fakeLocationClient) GetDeliveryDistance(ctx context.Context, orderID string) (float64, error) {
-	if f.err != nil {
-		return 0, f.err
-	}
-	return f.distance, nil
-}
-
-func newTestService(t *testing.T) (service.PriceService, *mock.MockPriceRepository, *gomock.Controller) {
+func newTestService(t *testing.T) (service.PriceService, *mock.MockPriceRepository, *mock.MockOrderClient, *mock.MockLocationClient, *gomock.Controller) {
 	ctrl := gomock.NewController(t)
 	mockRepo := mock.NewMockPriceRepository(ctrl)
-	svc := service.NewPriceService(
-		mockRepo,
-		&fakeOrderClient{
-			items: []model.OrderItem{
-				{ProductID: "item-1", Quantity: 2, UnitPrice: 10000},
-				{ProductID: "item-2", Quantity: 1, UnitPrice: 15000},
-			},
-		},
-		&fakeLocationClient{distance: 5},
-	)
-	return svc, mockRepo, ctrl
+	mockOrder := mock.NewMockOrderClient(ctrl)
+	mockLocation := mock.NewMockLocationClient(ctrl)
+
+	svc := service.NewPriceService(mockRepo, mockOrder, mockLocation)
+	return svc, mockRepo, mockOrder, mockLocation, ctrl
 }
 
 func TestCalculatePrice_Success(t *testing.T) {
-	svc, mockRepo, ctrl := newTestService(t)
+	svc, mockRepo, mockOrder, mockLocation, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
 	ctx := context.Background()
+	
+	mockOrder.EXPECT().GetOrderItems(ctx, "order-123").Return([]model.OrderItem{
+		{ProductID: "item-1", Quantity: 2, UnitPrice: 10000},
+		{ProductID: "item-2", Quantity: 1, UnitPrice: 15000},
+	}, nil).AnyTimes()
+
+	mockLocation.EXPECT().GetDeliveryDistance(ctx, "order-123").Return(5.0, nil).AnyTimes()
+
 	mockRepo.EXPECT().GetPricingRuleByType(ctx, "delivery").Return(&model.PriceRule{
 		RuleID: "delivery-per-km",
 		Type:   "delivery",
@@ -99,7 +77,7 @@ func TestCalculatePrice_Success(t *testing.T) {
 }
 
 func TestCalculatePrice_InvalidRequest_EmptyOrderID(t *testing.T) {
-	svc, _, ctrl := newTestService(t)
+	svc, _, _, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
 	_, err := svc.CalculatePrice(context.Background(), "")
@@ -113,27 +91,33 @@ func TestCalculatePrice_InvalidRequest_EmptyOrderID(t *testing.T) {
 }
 
 func TestCalculatePrice_NoOrderItems(t *testing.T) {
-	ctrl := gomock.NewController(t)
+	svc, _, mockOrder, mockLocation, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
-	mockRepo := mock.NewMockPriceRepository(ctrl)
-	svc := service.NewPriceService(
-		mockRepo,
-		&fakeOrderClient{items: []model.OrderItem{}},
-		&fakeLocationClient{distance: 2},
-	)
+	ctx := context.Background()
 
-	_, err := svc.CalculatePrice(context.Background(), "order-empty")
+	mockOrder.EXPECT().GetOrderItems(ctx, "order-empty").Return([]model.OrderItem{}, nil).AnyTimes()
+	mockLocation.EXPECT().GetDeliveryDistance(ctx, "order-empty").Return(2.0, nil).AnyTimes()
+
+	_, err := svc.CalculatePrice(ctx, "order-empty")
 	if !errors.Is(err, service.ErrNoOrderItems) {
 		t.Fatalf("expected ErrNoOrderItems, got %v", err)
 	}
 }
 
 func TestCalculatePrice_MissingPricingRule(t *testing.T) {
-	svc, mockRepo, ctrl := newTestService(t)
+	svc, mockRepo, mockOrder, mockLocation, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
 	ctx := context.Background()
+	
+	mockOrder.EXPECT().GetOrderItems(ctx, "order-123").Return([]model.OrderItem{
+		{ProductID: "item-1", Quantity: 2, UnitPrice: 10000},
+		{ProductID: "item-2", Quantity: 1, UnitPrice: 15000},
+	}, nil).AnyTimes()
+	
+	mockLocation.EXPECT().GetDeliveryDistance(ctx, "order-123").Return(5.0, nil).AnyTimes()
+
 	mockRepo.EXPECT().GetPricingRuleByType(ctx, "delivery").Return(nil, repository.ErrPriceRuleNotFound)
 
 	_, err := svc.CalculatePrice(ctx, "order-123")
@@ -146,29 +130,34 @@ func TestCalculatePrice_DistanceLogic(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
+	ctx := context.Background()
 	mockRepo := mock.NewMockPriceRepository(ctrl)
+	mockOrderNear := mock.NewMockOrderClient(ctrl)
+	mockLocationNear := mock.NewMockLocationClient(ctrl)
+	mockOrderFar := mock.NewMockOrderClient(ctrl)
+	mockLocationFar := mock.NewMockLocationClient(ctrl)
+
 	items := []model.OrderItem{
 		{ProductID: "item-1", Quantity: 1, UnitPrice: 10000},
 	}
-	svcNear := service.NewPriceService(
-		mockRepo,
-		&fakeOrderClient{items: items},
-		&fakeLocationClient{distance: 1},
-	)
-	svcFar := service.NewPriceService(
-		mockRepo,
-		&fakeOrderClient{items: items},
-		&fakeLocationClient{distance: 10},
-	)
+	
+	mockOrderNear.EXPECT().GetOrderItems(ctx, "order-near").Return(items, nil).AnyTimes()
+	mockLocationNear.EXPECT().GetDeliveryDistance(ctx, "order-near").Return(1.0, nil).AnyTimes()
+	
+	mockOrderFar.EXPECT().GetOrderItems(ctx, "order-far").Return(items, nil).AnyTimes()
+	mockLocationFar.EXPECT().GetDeliveryDistance(ctx, "order-far").Return(10.0, nil).AnyTimes()
+
+	svcNear := service.NewPriceService(mockRepo, mockOrderNear, mockLocationNear)
+	svcFar := service.NewPriceService(mockRepo, mockOrderFar, mockLocationFar)
 
 	mockRepo.EXPECT().GetPricingRuleByType(gomock.Any(), "delivery").Return(&model.PriceRule{Type: "delivery", Value: 5000}, nil).Times(2)
 	mockRepo.EXPECT().GetPricingRuleByType(gomock.Any(), "service").Return(&model.PriceRule{Type: "service", Value: 0.05}, nil).Times(2)
 
-	nearRes, err := svcNear.CalculatePrice(context.Background(), "order-near")
+	nearRes, err := svcNear.CalculatePrice(ctx, "order-near")
 	if err != nil {
 		t.Fatalf("unexpected error for near distance: %v", err)
 	}
-	farRes, err := svcFar.CalculatePrice(context.Background(), "order-far")
+	farRes, err := svcFar.CalculatePrice(ctx, "order-far")
 	if err != nil {
 		t.Fatalf("unexpected error for far distance: %v", err)
 	}
@@ -185,10 +174,17 @@ func TestCalculatePrice_DistanceLogic(t *testing.T) {
 }
 
 func TestCalculatePrice_TotalSumValidation(t *testing.T) {
-	svc, mockRepo, ctrl := newTestService(t)
+	svc, mockRepo, mockOrder, mockLocation, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
 	ctx := context.Background()
+	
+	mockOrder.EXPECT().GetOrderItems(ctx, "order-sum-check").Return([]model.OrderItem{
+		{ProductID: "item-1", Quantity: 2, UnitPrice: 10000},
+		{ProductID: "item-2", Quantity: 1, UnitPrice: 15000},
+	}, nil).AnyTimes()
+	mockLocation.EXPECT().GetDeliveryDistance(ctx, "order-sum-check").Return(5.0, nil).AnyTimes()
+
 	mockRepo.EXPECT().GetPricingRuleByType(ctx, "delivery").Return(&model.PriceRule{Type: "delivery", Value: 5000}, nil)
 	mockRepo.EXPECT().GetPricingRuleByType(ctx, "service").Return(&model.PriceRule{Type: "service", Value: 0.05}, nil)
 
@@ -205,19 +201,18 @@ func TestCalculatePrice_TotalSumValidation(t *testing.T) {
 }
 
 func TestCalculatePrice_LocationServiceTimeout(t *testing.T) {
-	ctrl := gomock.NewController(t)
+	svc, _, mockOrder, mockLocation, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
-	mockRepo := mock.NewMockPriceRepository(ctrl)
-	svc := service.NewPriceService(
-		mockRepo,
-		&fakeOrderClient{
-			items: []model.OrderItem{{ProductID: "item-1", Quantity: 1, UnitPrice: 10000}},
-		},
-		&fakeLocationClient{err: errors.New("location timeout")},
-	)
+	ctx := context.Background()
+	
+	mockOrder.EXPECT().GetOrderItems(ctx, "order-timeout").Return([]model.OrderItem{
+		{ProductID: "item-1", Quantity: 1, UnitPrice: 10000},
+	}, nil).AnyTimes()
+	
+	mockLocation.EXPECT().GetDeliveryDistance(ctx, "order-timeout").Return(0.0, errors.New("location timeout")).AnyTimes()
 
-	_, err := svc.CalculatePrice(context.Background(), "order-timeout")
+	_, err := svc.CalculatePrice(ctx, "order-timeout")
 	if err == nil {
 		t.Fatal("expected error when location service times out")
 	}
@@ -227,17 +222,15 @@ func TestCalculatePrice_LocationServiceTimeout(t *testing.T) {
 }
 
 func TestCalculatePrice_OrderServiceDown(t *testing.T) {
-	ctrl := gomock.NewController(t)
+	svc, _, mockOrder, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
-	mockRepo := mock.NewMockPriceRepository(ctrl)
-	svc := service.NewPriceService(
-		mockRepo,
-		&fakeOrderClient{err: errors.New("order service unavailable")},
-		&fakeLocationClient{distance: 2},
-	)
+	ctx := context.Background()
 
-	_, err := svc.CalculatePrice(context.Background(), "order-down")
+	mockOrder.EXPECT().GetOrderItems(ctx, "order-down").Return(nil, errors.New("order service unavailable")).AnyTimes()
+	// Location client is not expected to be called if Order client fails early.
+
+	_, err := svc.CalculatePrice(ctx, "order-down")
 	if err == nil {
 		t.Fatal("expected error when order service is down")
 	}
