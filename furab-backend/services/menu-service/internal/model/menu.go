@@ -1,29 +1,26 @@
-// Package model defines the domain models for menu-service.
 package model
 
 import "time"
 
-// Menu represents the Menu model in menu-service.
+// Menu represents the menu entity in the system.
 type Menu struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	// TODO: Add Menu-specific fields
+	ID          string    `json:"id"`
+	MerchantID  string    `json:"merchant_id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Price       float64   `json:"price"`
+	Category    string    `json:"category"`
+	ImageURL    string    `json:"image_url"`
+	IsAvailable bool      `json:"is_available"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// MenuItem represents the MenuItem model in menu-service.
-type MenuItem struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	// TODO: Add MenuItem-specific fields
+// SearchMenuRequest represents the criteria for searching menus.
+type SearchMenuRequest struct {
+	MerchantID string `json:"merchant_id"`
+	Query      string `json:"query"`
+	Category   string `json:"category"`
+	Limit      int    `json:"limit"`
+	Offset     int    `json:"offset"`
 }
-
-// Category represents the Category model in menu-service.
-type Category struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	// TODO: Add Category-specific fields
-}
-

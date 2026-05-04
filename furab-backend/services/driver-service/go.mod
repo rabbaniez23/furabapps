@@ -1,6 +1,6 @@
 module furab-backend/services/driver-service
 
-go 1.22
+go 1.23.0
 
 require (
 	furab-backend/shared v0.0.0

@@ -3,19 +3,40 @@ package model
 
 import "time"
 
-// Location represents the Location model in location-service.
-type Location struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	// TODO: Add Location-specific fields
+// UpdateLocationRequest represents the input to update a driver's location.
+type UpdateLocationRequest struct {
+	DriverID  string    `json:"driver_id"`
+	Latitude  float64   `json:"latitude"`
+	Longitude float64   `json:"longitude"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
-// GeoFence represents the GeoFence model in location-service.
-type GeoFence struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	// TODO: Add GeoFence-specific fields
+// UpdateStatusRequest represents the input to update a driver's status.
+type UpdateStatusRequest struct {
+	DriverID     string `json:"driver_id"`
+	DriverStatus string `json:"driver_status"` // "available" or "busy"
 }
 
+// SearchDriverRequest represents the input to search for nearby drivers.
+type SearchDriverRequest struct {
+	LatitudeOrigin  float64 `json:"latitude_origin"`
+	LongitudeOrigin float64 `json:"longitude_origin"`
+	Radius          float64 `json:"radius"` // in km
+}
+
+// DriverLocationResponse represents a single driver in the search results.
+type DriverLocationResponse struct {
+	DriverID     string  `json:"driver_id"`
+	Latitude     float64 `json:"latitude"`
+	Longitude    float64 `json:"longitude"`
+	Distance     float64 `json:"distance"` // distance from origin in km
+	DriverStatus string  `json:"driver_status"`
+}
+
+// TrackLocationResponse represents the output for tracking a specific driver.
+type TrackLocationResponse struct {
+	DriverID  string    `json:"driver_id"`
+	Latitude  float64   `json:"latitude"`
+	Longitude float64   `json:"longitude"`
+	Timestamp time.Time `json:"timestamp"`
+}
