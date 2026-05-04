@@ -1,226 +1,178 @@
+// Package service implements the business logic for user management.
 package service
 
 import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"furab-backend/services/user-service/internal/model"
 	"furab-backend/services/user-service/internal/repository"
 )
 
-type User = model.User
-
-// ✅ Define error biar konsisten & profesional
+// Common service errors.
 var (
-	ErrValidation     = errors.New("validation error")
-	ErrUserIDRequired = errors.New("user id required")
-	ErrNameRequired   = errors.New("name required")
-	ErrEmailRequired  = errors.New("email required")
-	ErrPhoneRequired  = errors.New("phone required")
+	ErrInvalidRequest = errors.New("invalid request")
 	ErrUserNotFound   = errors.New("user not found")
 )
 
-type CreateUserRequest struct {
-	UserID string
-	Name   string
-	Email  string
-	Phone  string
-}
-
-type CreateUserResponse struct {
-	UserID  string
-	Message string
-}
-
-type UpdateUserRequest struct {
-	Name  string
-	Email string
-}
-
-// UserService defines the interface for user-service business logic.
+// UserService defines the interface for user business logic.
+// This interface is used for dependency injection in handlers and can be mocked in tests.
 type UserService interface {
-	GetProfile(ctx context.Context) error
-	UpdateProfile(ctx context.Context) error
-	AddAddress(ctx context.Context) error
-	DeleteAddress(ctx context.Context) error
+	// CreateUser creates a new user account.
+	CreateUser(ctx context.Context, req *model.CreateUserRequest) (*model.CreateUserResponse, error)
 
-	CreateUser(ctx context.Context, req CreateUserRequest) (*CreateUserResponse, error)
-	GetUser(ctx context.Context, userID string) (*User, error)
-	UpdateUser(ctx context.Context, userID string, req UpdateUserRequest) error
-	DeactivateUser(ctx context.Context, userID string) error
+	// GetUser retrieves a user by their ID.
+	GetUser(ctx context.Context, userID string) (*model.User, error)
+
+	// UpdateUser updates an existing user's information.
+	UpdateUser(ctx context.Context, userID string, req *model.UpdateUserRequest) (*model.MessageResponse, error)
+
+	// DeactivateUser deactivates a user account.
+	DeactivateUser(ctx context.Context, userID string) (*model.MessageResponse, error)
 }
 
+// userServiceImpl is the concrete implementation of UserService.
 type userServiceImpl struct {
 	repo repository.UserRepository
 }
 
+// NewUserService creates a new UserService with the given dependencies.
 func NewUserService(repo repository.UserRepository) UserService {
-	return &userServiceImpl{repo: repo}
+	return &userServiceImpl{
+		repo: repo,
+	}
 }
 
-func normalizeInput(v string) string {
-	return strings.TrimSpace(v)
-}
+// CreateUser creates a new user account.
+func (s *userServiceImpl) CreateUser(ctx context.Context, req *model.CreateUserRequest) (*model.CreateUserResponse, error) {
+	// Validate request
+	if req == nil {
+		return nil, ErrInvalidRequest
+	}
 
-func validateUserID(userID string) error {
-	if normalizeInput(userID) == "" {
-		return ErrUserIDRequired
-	}
-	return nil
-}
+	// Normalize input
+	req.UserID = strings.TrimSpace(req.UserID)
+	req.Name = strings.TrimSpace(req.Name)
+	req.Phone = strings.TrimSpace(req.Phone)
+	req.Email = strings.TrimSpace(req.Email)
 
-func validateCreateUserRequest(req CreateUserRequest) error {
-	if err := validateUserID(req.UserID); err != nil {
-		return err
-	}
-	if normalizeInput(req.Name) == "" {
-		return ErrNameRequired
-	}
-	if normalizeInput(req.Email) == "" {
-		return ErrEmailRequired
-	}
-	if normalizeInput(req.Phone) == "" {
-		return ErrPhoneRequired
-	}
-	return nil
-}
-
-func validateUpdateUserRequest(req UpdateUserRequest) error {
-	if normalizeInput(req.Name) == "" {
-		return ErrNameRequired
-	}
-	if normalizeInput(req.Email) == "" {
-		return ErrEmailRequired
-	}
-	return nil
-}
-
-// =======================
-// UNUSED (boleh kasih TODO)
-// =======================
-func (s *userServiceImpl) GetProfile(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return errors.New("not implemented")
-}
-func (s *userServiceImpl) UpdateProfile(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return errors.New("not implemented")
-}
-func (s *userServiceImpl) AddAddress(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return errors.New("not implemented")
-}
-func (s *userServiceImpl) DeleteAddress(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return errors.New("not implemented")
-}
-
-// =======================
-// CORE LOGIC
-// =======================
-
-func (s *userServiceImpl) CreateUser(ctx context.Context, req CreateUserRequest) (*CreateUserResponse, error) {
-	if err := ctx.Err(); err != nil {
+	if err := req.Validate(); err != nil {
 		return nil, err
 	}
 
-	req.UserID = normalizeInput(req.UserID)
-	req.Name = normalizeInput(req.Name)
-	req.Email = normalizeInput(req.Email)
-	req.Phone = normalizeInput(req.Phone)
-	if err := validateCreateUserRequest(req); err != nil {
+	// Create user
+	now := time.Now().UTC()
+	user := &model.User{
+		UserID:    req.UserID,
+		Name:      req.Name,
+		Phone:     req.Phone,
+		Email:     req.Email,
+		Status:    model.UserStatusActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	// Save to database
+	if err := s.repo.Create(ctx, user); err != nil {
 		return nil, err
 	}
 
-	user := &User{
-		UserID: req.UserID,
-		Name:   req.Name,
-		Email:  req.Email,
-		Phone:  req.Phone,
-	}
-
-	if err := s.repo.Save(ctx, user); err != nil {
-		return nil, err
-	}
-
-	return &CreateUserResponse{
+	return &model.CreateUserResponse{
 		UserID:  user.UserID,
-		Message: "user created",
+		Message: "user created successfully",
 	}, nil
 }
 
-func (s *userServiceImpl) GetUser(ctx context.Context, userID string) (*User, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+// GetUser retrieves a user by their ID.
+func (s *userServiceImpl) GetUser(ctx context.Context, userID string) (*model.User, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, ErrInvalidRequest
 	}
-	userID = normalizeInput(userID)
-	if err := validateUserID(userID); err != nil {
+
+	user, err := s.repo.GetByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, repository.ErrUserNotFound) {
+			return nil, ErrUserNotFound
+		}
 		return nil, err
 	}
 
-	user, err := s.repo.FindByID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	if user == nil {
-		return nil, ErrUserNotFound
-	}
 	return user, nil
 }
 
-func (s *userServiceImpl) UpdateUser(ctx context.Context, userID string, req UpdateUserRequest) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	userID = normalizeInput(userID)
-	if err := validateUserID(userID); err != nil {
-		return err
-	}
-	req.Name = normalizeInput(req.Name)
-	req.Email = normalizeInput(req.Email)
-	if err := validateUpdateUserRequest(req); err != nil {
-		return err
+// UpdateUser updates an existing user's information.
+func (s *userServiceImpl) UpdateUser(ctx context.Context, userID string, req *model.UpdateUserRequest) (*model.MessageResponse, error) {
+	// Validate inputs
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, ErrInvalidRequest
 	}
 
-	user, err := s.repo.FindByID(ctx, userID)
+	if req == nil {
+		return nil, ErrInvalidRequest
+	}
+
+	// Normalize input
+	req.Name = strings.TrimSpace(req.Name)
+	req.Phone = strings.TrimSpace(req.Phone)
+	req.Email = strings.TrimSpace(req.Email)
+
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+
+	// Get existing user
+	user, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
-		return err
-	}
-	if user == nil {
-		return ErrUserNotFound
+		if errors.Is(err, repository.ErrUserNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
 	}
 
+	// Update fields
 	user.Name = req.Name
+	user.Phone = req.Phone
 	user.Email = req.Email
+	user.UpdatedAt = time.Now().UTC()
 
-	return s.repo.Update(ctx, user)
+	if err := s.repo.Update(ctx, user); err != nil {
+		return nil, err
+	}
+
+	return &model.MessageResponse{
+		Message: "user updated successfully",
+	}, nil
 }
 
-func (s *userServiceImpl) DeactivateUser(ctx context.Context, userID string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	userID = normalizeInput(userID)
-	if err := validateUserID(userID); err != nil {
-		return err
+// DeactivateUser deactivates a user account.
+func (s *userServiceImpl) DeactivateUser(ctx context.Context, userID string) (*model.MessageResponse, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, ErrInvalidRequest
 	}
 
-	user, err := s.repo.FindByID(ctx, userID)
+	// Get existing user
+	user, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
-		return err
-	}
-	if user == nil {
-		return ErrUserNotFound
+		if errors.Is(err, repository.ErrUserNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
 	}
 
-	return s.repo.Deactivate(ctx, userID)
+	// Deactivate
+	user.Status = model.UserStatusInactive
+	user.UpdatedAt = time.Now().UTC()
+
+	if err := s.repo.Update(ctx, user); err != nil {
+		return nil, err
+	}
+
+	return &model.MessageResponse{
+		Message: "user deactivated successfully",
+	}, nil
 }

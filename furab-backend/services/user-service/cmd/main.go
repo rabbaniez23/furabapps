@@ -2,16 +2,20 @@
 package main
 
 import (
+	"database/sql"
 	"log"
 	"net/http"
 	"time"
 
 	"furab-backend/services/user-service/internal/handler"
+	"furab-backend/services/user-service/internal/repository"
+	"furab-backend/services/user-service/internal/service"
 	"furab-backend/shared/config"
 	sharedlogger "furab-backend/shared/logger"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func main() {
@@ -20,6 +24,17 @@ func main() {
 
 	logger.Info("starting user-service", "port", cfg.ServerPort)
 
+	// Connect to database
+	db, err := sql.Open("pgx", cfg.DatabaseURL())
+	if err != nil {
+		log.Fatalf("failed to connect to database: %v", err)
+	}
+	defer db.Close()
+
+	// Wire dependencies (dependency injection)
+	repo := repository.NewPostgresUserRepository(db)
+	svc := service.NewUserService(repo)
+
 	// Setup router
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
@@ -27,7 +42,8 @@ func main() {
 	r.Use(chimiddleware.Timeout(30 * time.Second))
 
 	// Register routes
-	h := handler.NewUserHandler()
+	r.Get("/health", handler.HealthCheck)
+	h := handler.NewUserHandler(svc)
 	h.RegisterRoutes(r)
 
 	// Start server

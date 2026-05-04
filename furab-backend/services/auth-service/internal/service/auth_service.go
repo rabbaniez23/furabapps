@@ -1,3 +1,4 @@
+// Package service implements the business logic for auth-service.
 package service
 
 import (
@@ -8,59 +9,29 @@ import (
 	"furab-backend/services/auth-service/internal/model"
 )
 
-// Sentinel errors untuk konsistensi dan assertion via errors.Is()
+// Common service errors.
 var (
 	ErrContactRequired      = errors.New("phone/email required")
-	ErrContactInvalidFormat = errors.New("phone/email format tidak valid")
+	ErrContactInvalidFormat = errors.New("phone/email format invalid")
 	ErrInputRequired        = errors.New("input required")
-	ErrOTPInvalid           = errors.New("OTP tidak valid")
+	ErrOTPInvalid           = errors.New("OTP invalid")
 	ErrUserNotFound         = errors.New("user not found")
 	ErrUserIDMissing        = errors.New("user id missing")
 )
 
-const (
-	authMsgRegisterSuccess = "register success"
-	authMsgOTPSent         = "OTP dikirim"
-	authMsgLoginSuccess    = "login berhasil"
-
-	tokenStatusValid   = "valid"
-	tokenStatusInvalid = "invalid"
-	tokenMsgInvalid    = "token invalid"
-	tokenMsgValid      = "token valid"
-)
-
-// AuthResponse represents standard auth response
-type AuthResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
-}
-
-// LoginResponse represents login response
-type LoginResponse struct {
-	Status      string `json:"status"`
-	Message     string `json:"message"`
-	AccessToken string `json:"access_token"`
-}
-
-// TokenResponse represents token validation response
-type TokenResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
-}
-
-// UserService defines the interface for interacting with user data
+// UserService defines the interface for interacting with user data.
 type UserService interface {
 	CreateUser(ctx context.Context, contact string) error
 	GetUser(ctx context.Context, contact string) (*model.User, error)
 }
 
-// OTPService defines the interface for OTP operations
+// OTPService defines the interface for OTP operations.
 type OTPService interface {
 	GenerateOTP(ctx context.Context, contact string) error
 	VerifyOTP(ctx context.Context, contact, otpCode string) (bool, error)
 }
 
-// TokenGenerator defines the interface for token operations
+// TokenGenerator defines the interface for token operations.
 type TokenGenerator interface {
 	GenerateToken(userID string) (string, error)
 	ValidateToken(token string) (bool, error)
@@ -68,10 +39,17 @@ type TokenGenerator interface {
 
 // AuthService defines the interface for auth-service business logic.
 type AuthService interface {
-	Register(ctx context.Context, contact string) (*AuthResponse, error)
-	RequestOTP(ctx context.Context, contact string) (*AuthResponse, error)
-	VerifyOTP(ctx context.Context, contact, otpCode string) (*LoginResponse, error)
-	ValidateToken(ctx context.Context, token string) (*TokenResponse, error)
+	// Register registers a new user and sends OTP.
+	Register(ctx context.Context, contact string) (*model.AuthResponse, error)
+
+	// RequestOTP generates and sends OTP to the contact.
+	RequestOTP(ctx context.Context, contact string) (*model.AuthResponse, error)
+
+	// VerifyOTP verifies OTP and returns access token on success.
+	VerifyOTP(ctx context.Context, contact, otpCode string) (*model.LoginResponse, error)
+
+	// ValidateToken validates an access token.
+	ValidateToken(ctx context.Context, token string) (*model.TokenResponse, error)
 }
 
 // authServiceImpl is the concrete implementation of AuthService.
@@ -81,7 +59,7 @@ type authServiceImpl struct {
 	tokenGenerator TokenGenerator
 }
 
-// NewAuthService creates a new AuthService.
+// NewAuthService creates a new AuthService with the given dependencies.
 func NewAuthService(userService UserService, otpService OTPService, tokenGenerator TokenGenerator) AuthService {
 	return &authServiceImpl{
 		userService:    userService,
@@ -89,6 +67,8 @@ func NewAuthService(userService UserService, otpService OTPService, tokenGenerat
 		tokenGenerator: tokenGenerator,
 	}
 }
+
+// --- Validation helpers ---
 
 func normalizeInput(s string) string {
 	return strings.TrimSpace(s)
@@ -169,65 +149,49 @@ func validateContact(contact string) error {
 	return nil
 }
 
-func validateVerifyOTPInputs(contact, otpCode string) error {
-	if contact == "" || otpCode == "" {
-		return ErrInputRequired
-	}
-	return nil
-}
+// --- Service Methods ---
 
-func (s *authServiceImpl) Register(ctx context.Context, contact string) (*AuthResponse, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
+// Register registers a new user and sends OTP.
+func (s *authServiceImpl) Register(ctx context.Context, contact string) (*model.AuthResponse, error) {
 	contact = normalizeInput(contact)
 	if err := validateContact(contact); err != nil {
 		return nil, err
 	}
 	contact = canonicalContact(contact)
 
-	err := s.userService.CreateUser(ctx, contact)
-	if err != nil {
+	if err := s.userService.CreateUser(ctx, contact); err != nil {
 		return nil, err
 	}
 
-	err = s.otpService.GenerateOTP(ctx, contact)
-	if err != nil {
+	if err := s.otpService.GenerateOTP(ctx, contact); err != nil {
 		return nil, err
 	}
 
-	return &AuthResponse{Status: "success", Message: authMsgRegisterSuccess}, nil
+	return &model.AuthResponse{Status: "success", Message: "register success"}, nil
 }
 
-func (s *authServiceImpl) RequestOTP(ctx context.Context, contact string) (*AuthResponse, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
+// RequestOTP generates and sends OTP to the contact.
+func (s *authServiceImpl) RequestOTP(ctx context.Context, contact string) (*model.AuthResponse, error) {
 	contact = normalizeInput(contact)
 	if err := validateContact(contact); err != nil {
 		return nil, err
 	}
 	contact = canonicalContact(contact)
 
-	err := s.otpService.GenerateOTP(ctx, contact)
-	if err != nil {
+	if err := s.otpService.GenerateOTP(ctx, contact); err != nil {
 		return nil, err
 	}
 
-	return &AuthResponse{Status: "success", Message: authMsgOTPSent}, nil
+	return &model.AuthResponse{Status: "success", Message: "OTP sent"}, nil
 }
 
-func (s *authServiceImpl) VerifyOTP(ctx context.Context, contact, otpCode string) (*LoginResponse, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
+// VerifyOTP verifies OTP and returns access token on success.
+func (s *authServiceImpl) VerifyOTP(ctx context.Context, contact, otpCode string) (*model.LoginResponse, error) {
 	contact = normalizeInput(contact)
 	otpCode = normalizeInput(otpCode)
-	if err := validateVerifyOTPInputs(contact, otpCode); err != nil {
-		return nil, err
+
+	if contact == "" || otpCode == "" {
+		return nil, ErrInputRequired
 	}
 	if err := validateContact(contact); err != nil {
 		return nil, err
@@ -258,21 +222,18 @@ func (s *authServiceImpl) VerifyOTP(ctx context.Context, contact, otpCode string
 		return nil, err
 	}
 
-	return &LoginResponse{
+	return &model.LoginResponse{
 		Status:      "success",
-		Message:     authMsgLoginSuccess,
+		Message:     "login successful",
 		AccessToken: token,
 	}, nil
 }
 
-func (s *authServiceImpl) ValidateToken(ctx context.Context, token string) (*TokenResponse, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
+// ValidateToken validates an access token.
+func (s *authServiceImpl) ValidateToken(ctx context.Context, token string) (*model.TokenResponse, error) {
 	token = normalizeInput(token)
 	if token == "" {
-		return &TokenResponse{Status: tokenStatusInvalid, Message: tokenMsgInvalid}, nil
+		return &model.TokenResponse{Status: "invalid", Message: "token invalid"}, nil
 	}
 
 	valid, err := s.tokenGenerator.ValidateToken(token)
@@ -280,8 +241,8 @@ func (s *authServiceImpl) ValidateToken(ctx context.Context, token string) (*Tok
 		return nil, err
 	}
 	if !valid {
-		return &TokenResponse{Status: tokenStatusInvalid, Message: tokenMsgInvalid}, nil
+		return &model.TokenResponse{Status: "invalid", Message: "token invalid"}, nil
 	}
 
-	return &TokenResponse{Status: tokenStatusValid, Message: tokenMsgValid}, nil
+	return &model.TokenResponse{Status: "valid", Message: "token valid"}, nil
 }
