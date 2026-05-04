@@ -7,331 +7,396 @@ import (
 
 	"go.uber.org/mock/gomock"
 
-	// TODO: Sesuaikan import path ini dengan struktur project Anda setelah interface & model diperbarui
-	// "furab-backend/services/user-service/internal/model"
-	// "furab-backend/services/user-service/internal/service"
-	// mock_repository "furab-backend/services/user-service/internal/mock" 
+	"furab-backend/services/user-service/internal/model"
+	mock_repository "furab-backend/services/user-service/internal/repository/mock"
+	"furab-backend/services/user-service/internal/service"
 )
 
-// ============================================================================
-// Catatan: Struct dan interface di bawah ini adalah representasi dari spesifikasi.
-// Dalam implementasi nyata, ini berada di package model/service dan mock digenerate oleh mockgen.
-// ============================================================================
+var (
+	errRepoSave       = errors.New("repo save error")
+	errRepoFindByID   = errors.New("repo find error")
+	errRepoUpdate     = errors.New("repo update error")
+	errRepoDeactivate = errors.New("repo deactivate error")
+)
 
-type User struct {
-	UserID string
-	Name   string
-	Email  string
-	Phone  string
-	Status string
+type userArgMatcher struct {
+	match func(*model.User) bool
 }
 
-type CreateUserRequest struct {
-	UserID string
-	Name   string
-	Email  string
-	Phone  string
-}
-
-type CreateUserResponse struct {
-	UserID  string
-	Message string
-}
-
-type UpdateUserRequest struct {
-	Name  string
-	Email string
-}
-
-// Representasi dari UserService yang akan di-test
-type UserService interface {
-	CreateUser(ctx context.Context, req CreateUserRequest) (*CreateUserResponse, error)
-	GetUser(ctx context.Context, userID string) (*User, error)
-	UpdateUser(ctx context.Context, userID string, req UpdateUserRequest) error
-	DeactivateUser(ctx context.Context, userID string) error
-}
-
-// Representasi manual dari MockUserRepository (seharusnya digenerate otomatis oleh gomock)
-// Contoh command: mockgen -source=internal/repository/user_repository.go -destination=internal/mock/user_repository_mock.go -package=mock_repository
-type MockUserRepository struct {
-	SaveFunc       func(ctx context.Context, user *User) error
-	FindByIDFunc   func(ctx context.Context, userID string) (*User, error)
-	UpdateFunc     func(ctx context.Context, user *User) error
-	DeactivateFunc func(ctx context.Context, userID string) error
-}
-
-func (m *MockUserRepository) Save(ctx context.Context, user *User) error { return m.SaveFunc(ctx, user) }
-func (m *MockUserRepository) FindByID(ctx context.Context, userID string) (*User, error) { return m.FindByIDFunc(ctx, userID) }
-func (m *MockUserRepository) Update(ctx context.Context, user *User) error { return m.UpdateFunc(ctx, user) }
-func (m *MockUserRepository) Deactivate(ctx context.Context, userID string) error { return m.DeactivateFunc(ctx, userID) }
-
-// Implementasi Dummy Service untuk Testing (Seharusnya dari internal/service)
-type userServiceImpl struct {
-	repo *MockUserRepository
-}
-
-func (s *userServiceImpl) CreateUser(ctx context.Context, req CreateUserRequest) (*CreateUserResponse, error) {
-	if req.Email == "" {
-		return nil, errors.New("email required")
+func (m userArgMatcher) Matches(x any) bool {
+	u, ok := x.(*model.User)
+	if !ok {
+		return false
 	}
-	if req.Name == "" {
-		return nil, errors.New("validation error")
-	}
-
-	user := &User{
-		UserID: req.UserID,
-		Name:   req.Name,
-		Email:  req.Email,
-		Phone:  req.Phone,
-	}
-
-	if err := s.repo.Save(ctx, user); err != nil {
-		return nil, err
-	}
-
-	return &CreateUserResponse{UserID: user.UserID, Message: "sukses"}, nil
+	return m.match(u)
 }
 
-func (s *userServiceImpl) GetUser(ctx context.Context, userID string) (*User, error) {
-	user, err := s.repo.FindByID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	if user == nil {
-		return nil, errors.New("user not found")
-	}
-	return user, nil
+func (m userArgMatcher) String() string {
+	return "matches *model.User predicate"
 }
 
-func (s *userServiceImpl) UpdateUser(ctx context.Context, userID string, req UpdateUserRequest) error {
-	user, err := s.repo.FindByID(ctx, userID)
-	if err != nil {
-		return err
-	}
-	if user == nil {
-		return errors.New("user not found")
-	}
-	user.Name = req.Name
-	user.Email = req.Email
-	return s.repo.Update(ctx, user)
+func matchUser(match func(*model.User) bool) gomock.Matcher {
+	return userArgMatcher{match: match}
 }
 
-func (s *userServiceImpl) DeactivateUser(ctx context.Context, userID string) error {
-	_, err := s.repo.FindByID(ctx, userID)
-	if err != nil {
-		return err
-	}
-	return s.repo.Deactivate(ctx, userID)
+func setupUserService(t *testing.T) (*gomock.Controller, *mock_repository.MockUserRepository, service.UserService) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	mockRepo := mock_repository.NewMockUserRepository(ctrl)
+	return ctrl, mockRepo, service.NewUserService(mockRepo)
 }
-
-
-// ============================================================================
-// UNIT TESTS MULAI DARI SINI
-// ============================================================================
 
 func TestUserService_CreateUser(t *testing.T) {
-	// gomock controller digunakan untuk mock standard, di sini kita pakai dummy struct untuk demo
-	ctrl := gomock.NewController(t)
+	ctrl, mockRepo, svc := setupUserService(t)
 	defer ctrl.Finish()
 
-	t.Run("Success - User berhasil dibuat", func(t *testing.T) {
-		repo := &MockUserRepository{
-			SaveFunc: func(ctx context.Context, user *User) error {
-				if user.UserID != "1" {
-					t.Errorf("Expected UserID 1, got %s", user.UserID)
-				}
-				return nil
-			},
-		}
-		service := &userServiceImpl{repo: repo}
+	t.Run("success", func(t *testing.T) {
+		mockRepo.EXPECT().
+			Save(gomock.Any(), matchUser(func(u *model.User) bool {
+				return u != nil &&
+					u.UserID == "user-1" &&
+					u.Name == "Erv" &&
+					u.Email == "erv@mail.com" &&
+					u.Phone == "08123"
+			})).
+			Return(nil)
 
-		req := CreateUserRequest{
-			UserID: "1",
-			Name:   "Erv",
-			Email:  "erv@mail.com",
-			Phone:  "08123",
-		}
-
-		res, err := service.CreateUser(context.Background(), req)
-
+		res, err := svc.CreateUser(context.Background(), service.CreateUserRequest{
+			UserID: " user-1 ",
+			Name:   " Erv ",
+			Email:  " erv@mail.com ",
+			Phone:  " 08123 ",
+		})
 		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
+			t.Fatalf("expected no error, got %v", err)
 		}
-		if res.UserID != "1" {
-			t.Errorf("Expected response UserID 1, got %s", res.UserID)
+		if res == nil || res.UserID != "user-1" {
+			t.Fatalf("expected user-1, got %#v", res)
+		}
+		if res.Message != "user created" {
+			t.Fatalf("expected message 'user created', got %q", res.Message)
 		}
 	})
 
-	t.Run("Error - Email kosong", func(t *testing.T) {
-		repo := &MockUserRepository{
-			SaveFunc: func(ctx context.Context, user *User) error {
-				t.Fatal("Repository Save() should not be called")
-				return nil
-			},
-		}
-		service := &userServiceImpl{repo: repo}
-
-		req := CreateUserRequest{
-			UserID: "1",
+	t.Run("validation_error_user_id_required", func(t *testing.T) {
+		res, err := svc.CreateUser(context.Background(), service.CreateUserRequest{
+			UserID: "",
 			Name:   "Erv",
-			Email:  "", // Kosong
-			Phone:  "08123",
-		}
-
-		res, err := service.CreateUser(context.Background(), req)
-
-		if err == nil || err.Error() != "email required" {
-			t.Fatalf("Expected 'email required' error, got %v", err)
-		}
-		if res != nil {
-			t.Errorf("Expected nil response, got %v", res)
-		}
-	})
-
-	t.Run("Error - Data tidak lengkap", func(t *testing.T) {
-		repo := &MockUserRepository{
-			SaveFunc: func(ctx context.Context, user *User) error {
-				t.Fatal("Repository Save() should not be called")
-				return nil
-			},
-		}
-		service := &userServiceImpl{repo: repo}
-
-		req := CreateUserRequest{
-			UserID: "1",
-			Name:   "", // Kosong
 			Email:  "erv@mail.com",
 			Phone:  "08123",
-		}
-
-		res, err := service.CreateUser(context.Background(), req)
-
-		if err == nil {
-			t.Fatal("Expected validation error, got none")
-		}
+		})
 		if res != nil {
-			t.Errorf("Expected nil response, got %v", res)
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, service.ErrUserIDRequired) {
+			t.Fatalf("expected ErrUserIDRequired, got %v", err)
+		}
+	})
+
+	t.Run("validation_error_required_fields", func(t *testing.T) {
+		_, errName := svc.CreateUser(context.Background(), service.CreateUserRequest{
+			UserID: "user-1",
+			Name:   "",
+			Email:  "erv@mail.com",
+			Phone:  "08123",
+		})
+		if !errors.Is(errName, service.ErrNameRequired) {
+			t.Fatalf("expected ErrNameRequired, got %v", errName)
+		}
+
+		_, errEmail := svc.CreateUser(context.Background(), service.CreateUserRequest{
+			UserID: "user-1",
+			Name:   "Erv",
+			Email:  "",
+			Phone:  "08123",
+		})
+		if !errors.Is(errEmail, service.ErrEmailRequired) {
+			t.Fatalf("expected ErrEmailRequired, got %v", errEmail)
+		}
+
+		_, errPhone := svc.CreateUser(context.Background(), service.CreateUserRequest{
+			UserID: "user-1",
+			Name:   "Erv",
+			Email:  "erv@mail.com",
+			Phone:  "",
+		})
+		if !errors.Is(errPhone, service.ErrPhoneRequired) {
+			t.Fatalf("expected ErrPhoneRequired, got %v", errPhone)
+		}
+	})
+
+	t.Run("repository_error", func(t *testing.T) {
+		mockRepo.EXPECT().Save(gomock.Any(), gomock.Any()).Return(errRepoSave)
+
+		res, err := svc.CreateUser(context.Background(), service.CreateUserRequest{
+			UserID: "user-1",
+			Name:   "Erv",
+			Email:  "erv@mail.com",
+			Phone:  "08123",
+		})
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, errRepoSave) {
+			t.Fatalf("expected repo save error, got %v", err)
+		}
+	})
+
+	t.Run("context_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		res, err := svc.CreateUser(ctx, service.CreateUserRequest{
+			UserID: "user-1",
+			Name:   "Erv",
+			Email:  "erv@mail.com",
+			Phone:  "08123",
+		})
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
 		}
 	})
 }
 
 func TestUserService_GetUser(t *testing.T) {
-	ctrl := gomock.NewController(t)
+	ctrl, mockRepo, svc := setupUserService(t)
 	defer ctrl.Finish()
 
-	t.Run("Success - User ditemukan", func(t *testing.T) {
-		repo := &MockUserRepository{
-			FindByIDFunc: func(ctx context.Context, userID string) (*User, error) {
-				if userID != "1" {
-					t.Errorf("Expected UserID 1, got %s", userID)
-				}
-				return &User{UserID: "1", Name: "Erv"}, nil
-			},
-		}
-		service := &userServiceImpl{repo: repo}
+	t.Run("success", func(t *testing.T) {
+		mockRepo.EXPECT().FindByID(gomock.Any(), "1").Return(&model.User{UserID: "1", Name: "Erv"}, nil)
 
-		user, err := service.GetUser(context.Background(), "1")
-
+		user, err := svc.GetUser(context.Background(), "1")
 		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
+			t.Fatalf("expected no error, got %v", err)
 		}
 		if user == nil || user.UserID != "1" {
-			t.Errorf("Expected User 1, got %v", user)
+			t.Fatalf("expected user 1, got %#v", user)
 		}
 	})
 
-	t.Run("Error - User tidak ditemukan", func(t *testing.T) {
-		repo := &MockUserRepository{
-			FindByIDFunc: func(ctx context.Context, userID string) (*User, error) {
-				return nil, errors.New("user not found")
-			},
-		}
-		service := &userServiceImpl{repo: repo}
-
-		user, err := service.GetUser(context .Background(), "99")
-
-		if err == nil || err.Error() != "user not found" {
-			t.Fatalf("Expected 'user not found' error, got %v", err)
-		}
+	t.Run("validation_error_user_id_required", func(t *testing.T) {
+		user, err := svc.GetUser(context.Background(), " ")
 		if user != nil {
-			t.Errorf("Expected nil user, got %v", user)
+			t.Fatalf("expected nil user, got %#v", user)
+		}
+		if !errors.Is(err, service.ErrUserIDRequired) {
+			t.Fatalf("expected ErrUserIDRequired, got %v", err)
+		}
+	})
+
+	t.Run("not_found", func(t *testing.T) {
+		mockRepo.EXPECT().FindByID(gomock.Any(), "99").Return(nil, nil)
+
+		user, err := svc.GetUser(context.Background(), "99")
+		if user != nil {
+			t.Fatalf("expected nil user, got %#v", user)
+		}
+		if !errors.Is(err, service.ErrUserNotFound) {
+			t.Fatalf("expected ErrUserNotFound, got %v", err)
+		}
+	})
+
+	t.Run("repository_error_find", func(t *testing.T) {
+		mockRepo.EXPECT().FindByID(gomock.Any(), "1").Return(nil, errRepoFindByID)
+
+		user, err := svc.GetUser(context.Background(), "1")
+		if user != nil {
+			t.Fatalf("expected nil user, got %#v", user)
+		}
+		if !errors.Is(err, errRepoFindByID) {
+			t.Fatalf("expected repo find error, got %v", err)
+		}
+	})
+
+	t.Run("context_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		user, err := svc.GetUser(ctx, "1")
+		if user != nil {
+			t.Fatalf("expected nil user, got %#v", user)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
 		}
 	})
 }
 
 func TestUserService_UpdateUser(t *testing.T) {
-	ctrl := gomock.NewController(t)
+	ctrl, mockRepo, svc := setupUserService(t)
 	defer ctrl.Finish()
 
-	t.Run("Success - Data berhasil diupdate", func(t *testing.T) {
-		repo := &MockUserRepository{
-			FindByIDFunc: func(ctx context.Context, userID string) (*User, error) {
-				return &User{UserID: "1", Name: "Erv", Email: "erv@mail.com"}, nil
-			},
-			UpdateFunc: func(ctx context.Context, user *User) error {
-				if user.Name != "Erv Update" || user.Email != "erv_update@mail.com" {
-					t.Errorf("Updated user data mismatch, got: %+v", user)
-				}
-				return nil
-			},
-		}
-		service := &userServiceImpl{repo: repo}
+	t.Run("success", func(t *testing.T) {
+		mockRepo.EXPECT().FindByID(gomock.Any(), "1").Return(&model.User{UserID: "1"}, nil)
+		mockRepo.EXPECT().
+			Update(gomock.Any(), matchUser(func(u *model.User) bool {
+				return u != nil && u.UserID == "1" && u.Name == "Updated" && u.Email == "updated@mail.com"
+			})).
+			Return(nil)
 
-		req := UpdateUserRequest{
-			Name:  "Erv Update",
-			Email: "erv_update@mail.com",
-		}
-
-		err := service.UpdateUser(context.Background(), "1", req)
-
+		err := svc.UpdateUser(context.Background(), "1", service.UpdateUserRequest{
+			Name:  "Updated",
+			Email: "updated@mail.com",
+		})
 		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
+			t.Fatalf("expected no error, got %v", err)
 		}
 	})
 
-	t.Run("Error - User tidak ditemukan", func(t *testing.T) {
-		repo := &MockUserRepository{
-			FindByIDFunc: func(ctx context.Context, userID string) (*User, error) {
-				return nil, errors.New("user not found")
-			},
+	t.Run("validation_error_user_id_required", func(t *testing.T) {
+		err := svc.UpdateUser(context.Background(), "", service.UpdateUserRequest{
+			Name:  "Updated",
+			Email: "updated@mail.com",
+		})
+		if !errors.Is(err, service.ErrUserIDRequired) {
+			t.Fatalf("expected ErrUserIDRequired, got %v", err)
 		}
-		service := &userServiceImpl{repo: repo}
+	})
 
-		req := UpdateUserRequest{
-			Name:  "Erv Update",
-			Email: "erv_update@mail.com",
+	t.Run("validation_error_payload", func(t *testing.T) {
+		err := svc.UpdateUser(context.Background(), "1", service.UpdateUserRequest{
+			Name:  "",
+			Email: "updated@mail.com",
+		})
+		if !errors.Is(err, service.ErrNameRequired) {
+			t.Fatalf("expected ErrNameRequired, got %v", err)
 		}
+	})
 
-		err := service.UpdateUser(context.Background(), "99", req)
+	t.Run("validation_error_payload_email_required", func(t *testing.T) {
+		err := svc.UpdateUser(context.Background(), "1", service.UpdateUserRequest{
+			Name:  "Updated",
+			Email: " ",
+		})
+		if !errors.Is(err, service.ErrEmailRequired) {
+			t.Fatalf("expected ErrEmailRequired, got %v", err)
+		}
+	})
 
-		if err == nil || err.Error() != "user not found" {
-			t.Fatalf("Expected 'user not found' error, got %v", err)
+	t.Run("not_found", func(t *testing.T) {
+		mockRepo.EXPECT().FindByID(gomock.Any(), "99").Return(nil, nil)
+
+		err := svc.UpdateUser(context.Background(), "99", service.UpdateUserRequest{
+			Name:  "Updated",
+			Email: "updated@mail.com",
+		})
+		if !errors.Is(err, service.ErrUserNotFound) {
+			t.Fatalf("expected ErrUserNotFound, got %v", err)
+		}
+	})
+
+	t.Run("repository_error_find", func(t *testing.T) {
+		mockRepo.EXPECT().FindByID(gomock.Any(), "1").Return(nil, errRepoFindByID)
+
+		err := svc.UpdateUser(context.Background(), "1", service.UpdateUserRequest{
+			Name:  "Updated",
+			Email: "updated@mail.com",
+		})
+		if !errors.Is(err, errRepoFindByID) {
+			t.Fatalf("expected repo find error, got %v", err)
+		}
+	})
+
+	t.Run("repository_error_update", func(t *testing.T) {
+		mockRepo.EXPECT().FindByID(gomock.Any(), "1").Return(&model.User{UserID: "1"}, nil)
+		mockRepo.EXPECT().
+			Update(gomock.Any(), matchUser(func(u *model.User) bool {
+				return u != nil && u.UserID == "1" && u.Name == "Updated" && u.Email == "updated@mail.com"
+			})).
+			Return(errRepoUpdate)
+
+		err := svc.UpdateUser(context.Background(), "1", service.UpdateUserRequest{
+			Name:  "Updated",
+			Email: "updated@mail.com",
+		})
+		if !errors.Is(err, errRepoUpdate) {
+			t.Fatalf("expected repo update error, got %v", err)
+		}
+	})
+
+	t.Run("context_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := svc.UpdateUser(ctx, "1", service.UpdateUserRequest{
+			Name:  "Updated",
+			Email: "updated@mail.com",
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
 		}
 	})
 }
 
 func TestUserService_DeactivateUser(t *testing.T) {
-	ctrl := gomock.NewController(t)
+	ctrl, mockRepo, svc := setupUserService(t)
 	defer ctrl.Finish()
 
-	t.Run("Success - User dinonaktifkan", func(t *testing.T) {
-		repo := &MockUserRepository{
-			FindByIDFunc: func(ctx context.Context, userID string) (*User, error) {
-				return &User{UserID: "1", Status: "active"}, nil
-			},
-			DeactivateFunc: func(ctx context.Context, userID string) error {
-				if userID != "1" {
-					t.Errorf("Expected UserID 1, got %s", userID)
-				}
-				return nil
-			},
-		}
-		service := &userServiceImpl{repo: repo}
+	t.Run("success", func(t *testing.T) {
+		mockRepo.EXPECT().FindByID(gomock.Any(), "1").Return(&model.User{UserID: "1"}, nil)
+		mockRepo.EXPECT().Deactivate(gomock.Any(), "1").Return(nil)
 
-		err := service.DeactivateUser(context.Background(), "1")
-
+		err := svc.DeactivateUser(context.Background(), "1")
 		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
+			t.Fatalf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("validation_error_user_id_required", func(t *testing.T) {
+		err := svc.DeactivateUser(context.Background(), "")
+		if !errors.Is(err, service.ErrUserIDRequired) {
+			t.Fatalf("expected ErrUserIDRequired, got %v", err)
+		}
+	})
+
+	t.Run("not_found", func(t *testing.T) {
+		mockRepo.EXPECT().FindByID(gomock.Any(), "99").Return(nil, nil)
+
+		err := svc.DeactivateUser(context.Background(), "99")
+		if !errors.Is(err, service.ErrUserNotFound) {
+			t.Fatalf("expected ErrUserNotFound, got %v", err)
+		}
+	})
+
+	t.Run("repository_error_find", func(t *testing.T) {
+		mockRepo.EXPECT().FindByID(gomock.Any(), "1").Return(nil, errRepoFindByID)
+
+		err := svc.DeactivateUser(context.Background(), "1")
+		if !errors.Is(err, errRepoFindByID) {
+			t.Fatalf("expected repo find error, got %v", err)
+		}
+	})
+
+	t.Run("repository_error_deactivate", func(t *testing.T) {
+		mockRepo.EXPECT().FindByID(gomock.Any(), "1").Return(&model.User{UserID: "1"}, nil)
+		mockRepo.EXPECT().Deactivate(gomock.Any(), "1").Return(errRepoDeactivate)
+
+		err := svc.DeactivateUser(context.Background(), "1")
+		if !errors.Is(err, errRepoDeactivate) {
+			t.Fatalf("expected repo deactivate error, got %v", err)
+		}
+	})
+
+	t.Run("normalize_user_id_before_repo_call", func(t *testing.T) {
+		mockRepo.EXPECT().FindByID(gomock.Any(), "1").Return(&model.User{UserID: "1"}, nil)
+		mockRepo.EXPECT().Deactivate(gomock.Any(), "1").Return(nil)
+
+		err := svc.DeactivateUser(context.Background(), " 1 ")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("context_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := svc.DeactivateUser(ctx, "1")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
 		}
 	})
 }

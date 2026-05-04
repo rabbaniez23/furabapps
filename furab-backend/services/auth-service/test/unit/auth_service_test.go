@@ -6,349 +6,484 @@ import (
 	"testing"
 
 	"go.uber.org/mock/gomock"
+
+	"furab-backend/services/auth-service/internal/model"
+	"furab-backend/services/auth-service/internal/service"
+	mock_service "furab-backend/services/auth-service/test/unit/mock"
 )
 
-// ============================================================================
-// Catatan: Struct dan interface di bawah ini adalah representasi dari desain.
-// Pada proyek nyata, definisi ini akan berada di internal/service dan mock
-// digenerate otomatis menggunakan gomock (mockgen).
-// ============================================================================
+// Sentinel errors returned by mocks so assertions use errors.Is, not string equality.
+var (
+	errDependencyUserCreate    = errors.New("dependency: user create failed")
+	errDependencyUserGet       = errors.New("dependency: user get failed")
+	errDependencyOTPGenerate   = errors.New("dependency: otp generate failed")
+	errDependencyOTPVerify     = errors.New("dependency: otp verify failed")
+	errDependencyTokenGenerate = errors.New("dependency: token generate failed")
+	errDependencyTokenValidate = errors.New("dependency: token validate failed")
+)
 
-// 1. DTO (Data Transfer Objects)
-type AuthResponse struct {
-	Status  string
-	Message string
+const (
+	validPhone = "08123456789"
+	validOTP   = "123456"
+)
+
+func setupAuthService(t *testing.T) (
+	mockUser *mock_service.MockUserService,
+	mockOTP *mock_service.MockOTPService,
+	mockToken *mock_service.MockTokenGenerator,
+	svc service.AuthService,
+) {
+	t.Helper()
+	// gomock.NewController registers Finish on t.Cleanup for *testing.T — no defer needed.
+	ctrl := gomock.NewController(t)
+	mockUser = mock_service.NewMockUserService(ctrl)
+	mockOTP = mock_service.NewMockOTPService(ctrl)
+	mockToken = mock_service.NewMockTokenGenerator(ctrl)
+	svc = service.NewAuthService(mockUser, mockOTP, mockToken)
+	return mockUser, mockOTP, mockToken, svc
 }
-
-type LoginResponse struct {
-	Status      string
-	Message     string
-	AccessToken string
-}
-
-type TokenResponse struct {
-	Status  string
-	Message string
-}
-
-// 2. Mocked Dependencies Interface
-
-// MockUserService mensimulasikan interaksi dengan User Service
-type MockUserService struct {
-	SaveUserFunc func(ctx context.Context, contact string) error
-}
-
-func (m *MockUserService) SaveUser(ctx context.Context, contact string) error {
-	if m.SaveUserFunc != nil {
-		return m.SaveUserFunc(ctx, contact)
-	}
-	return nil
-}
-
-// MockOTPService mensimulasikan interaksi dengan OTP Service
-type MockOTPService struct {
-	GenerateOTPFunc func(ctx context.Context, contact string) error
-	VerifyOTPFunc   func(ctx context.Context, contact, otpCode string) (bool, error)
-}
-
-func (m *MockOTPService) GenerateOTP(ctx context.Context, contact string) error {
-	if m.GenerateOTPFunc != nil {
-		return m.GenerateOTPFunc(ctx, contact)
-	}
-	return nil
-}
-
-func (m *MockOTPService) VerifyOTP(ctx context.Context, contact, otpCode string) (bool, error) {
-	if m.VerifyOTPFunc != nil {
-		return m.VerifyOTPFunc(ctx, contact, otpCode)
-	}
-	return false, nil
-}
-
-// MockTokenGenerator mensimulasikan pembuatan dan validasi JWT/Token
-type MockTokenGenerator struct {
-	GenerateTokenFunc func(userID string) (string, error)
-	ValidateTokenFunc func(token string) (bool, error)
-}
-
-func (m *MockTokenGenerator) GenerateToken(userID string) (string, error) {
-	if m.GenerateTokenFunc != nil {
-		return m.GenerateTokenFunc(userID)
-	}
-	return "", nil
-}
-
-func (m *MockTokenGenerator) ValidateToken(token string) (bool, error) {
-	if m.ValidateTokenFunc != nil {
-		return m.ValidateTokenFunc(token)
-	}
-	return false, nil
-}
-
-// 3. AuthService Interface & Implementation
-
-type AuthService interface {
-	Register(ctx context.Context, contact string) (*AuthResponse, error)
-	RequestOTP(ctx context.Context, contact string) (*AuthResponse, error)
-	VerifyOTP(ctx context.Context, contact, otpCode string) (*LoginResponse, error)
-	ValidateToken(ctx context.Context, token string) (*TokenResponse, error)
-}
-
-type authServiceImpl struct {
-	userService    *MockUserService
-	otpService     *MockOTPService
-	tokenGenerator *MockTokenGenerator
-}
-
-func (s *authServiceImpl) Register(ctx context.Context, contact string) (*AuthResponse, error) {
-	if contact == "" {
-		return &AuthResponse{Status: "failed", Message: "input required"}, errors.New("input required")
-	}
-
-	// Panggil dependency User Service
-	err := s.userService.SaveUser(ctx, contact)
-	if err != nil {
-		return &AuthResponse{Status: "failed", Message: "gagal menyimpan user"}, err
-	}
-
-	return &AuthResponse{Status: "success", Message: "registrasi berhasil"}, nil
-}
-
-func (s *authServiceImpl) RequestOTP(ctx context.Context, contact string) (*AuthResponse, error) {
-	if contact == "" {
-		return &AuthResponse{Status: "failed", Message: "input required"}, errors.New("input required")
-	}
-
-	// Panggil dependency OTP Service
-	err := s.otpService.GenerateOTP(ctx, contact)
-	if err != nil {
-		return &AuthResponse{Status: "failed", Message: "gagal request OTP"}, err
-	}
-
-	return &AuthResponse{Status: "success", Message: "OTP dikirim"}, nil
-}
-
-func (s *authServiceImpl) VerifyOTP(ctx context.Context, contact, otpCode string) (*LoginResponse, error) {
-	valid, err := s.otpService.VerifyOTP(ctx, contact, otpCode)
-	if err != nil || !valid {
-		return &LoginResponse{Status: "failed", Message: "OTP tidak valid"}, errors.New("OTP tidak valid")
-	}
-
-	// Dummy get user ID for token generation
-	userID := "user-123"
-
-	token, err := s.tokenGenerator.GenerateToken(userID)
-	if err != nil {
-		return &LoginResponse{Status: "failed", Message: "gagal membuat token"}, err
-	}
-
-	return &LoginResponse{
-		Status:      "success",
-		Message:     "login berhasil",
-		AccessToken: token,
-	}, nil
-}
-
-func (s *authServiceImpl) ValidateToken(ctx context.Context, token string) (*TokenResponse, error) {
-	valid, err := s.tokenGenerator.ValidateToken(token)
-	if err != nil || !valid {
-		return &TokenResponse{Status: "invalid", Message: "token tidak valid"}, errors.New("token tidak valid")
-	}
-
-	return &TokenResponse{Status: "valid", Message: "token valid"}, nil
-}
-
-// ============================================================================
-// UNIT TESTS MULAI DARI SINI
-// ============================================================================
 
 func TestAuthService_Register(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	ctx := context.Background()
 
-	t.Run("Success - Registrasi berhasil", func(t *testing.T) {
-		userService := &MockUserService{
-			SaveUserFunc: func(ctx context.Context, contact string) error {
-				if contact != "08123456789" {
-					t.Errorf("Expected contact '08123456789', got %s", contact)
-				}
-				return nil
-			},
-		}
-		service := &authServiceImpl{userService: userService}
+	t.Run("success_creates_user_and_sends_otp", func(t *testing.T) {
+		mockUser, mockOTP, _, svc := setupAuthService(t)
+		mockUser.EXPECT().
+			CreateUser(gomock.Any(), validPhone).
+			Return(nil)
+		mockOTP.EXPECT().
+			GenerateOTP(gomock.Any(), validPhone).
+			Return(nil)
 
-		res, err := service.Register(context.Background(), "08123456789")
-
+		res, err := svc.Register(ctx, validPhone)
 		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
+			t.Fatalf("Register: %v", err)
 		}
-		if res.Status != "success" || res.Message != "registrasi berhasil" {
-			t.Errorf("Expected success response, got %v", res)
+		if res == nil || res.Status != "success" {
+			t.Fatalf("Register: got res %#v", res)
 		}
 	})
 
-	t.Run("Error - Input kosong", func(t *testing.T) {
-		userService := &MockUserService{
-			SaveUserFunc: func(ctx context.Context, contact string) error {
-				t.Fatal("UserService should not be called when input is empty")
-				return nil
-			},
-		}
-		service := &authServiceImpl{userService: userService}
+	t.Run("success_phone_input_with_separators_calls_deps_with_canonical_contact", func(t *testing.T) {
+		mockUser, mockOTP, _, svc := setupAuthService(t)
 
-		res, err := service.Register(context.Background(), "")
+		input := "08123 456789"
+		mockUser.EXPECT().
+			CreateUser(gomock.Any(), validPhone).
+			Return(nil)
+		mockOTP.EXPECT().
+			GenerateOTP(gomock.Any(), validPhone).
+			Return(nil)
 
-		if err == nil {
-			t.Fatal("Expected error, got nil")
+		res, err := svc.Register(ctx, input)
+		if err != nil {
+			t.Fatalf("Register: %v", err)
 		}
-		if res == nil || res.Status != "failed" || res.Message != "input required" {
-			t.Errorf("Expected failed response due to empty input, got %v", res)
+		if res == nil || res.Status != "success" {
+			t.Fatalf("Register: got res %#v", res)
+		}
+	})
+
+	t.Run("validation_error_missing_contact", func(t *testing.T) {
+		_, _, _, svc := setupAuthService(t)
+		res, err := svc.Register(ctx, "")
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, service.ErrContactRequired) {
+			t.Fatalf("expected ErrContactRequired, got %v", err)
+		}
+	})
+
+	t.Run("validation_error_invalid_contact_format", func(t *testing.T) {
+		_, _, _, svc := setupAuthService(t)
+		res, err := svc.Register(ctx, "not-a-phone-or-email")
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, service.ErrContactInvalidFormat) {
+			t.Fatalf("expected ErrContactInvalidFormat, got %v", err)
+		}
+	})
+
+	t.Run("validation_error_phone_with_invalid_character", func(t *testing.T) {
+		_, _, _, svc := setupAuthService(t)
+
+		res, err := svc.Register(ctx, "08123x456789")
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, service.ErrContactInvalidFormat) {
+			t.Fatalf("expected ErrContactInvalidFormat, got %v", err)
+		}
+	})
+
+	t.Run("dependency_error_user_service", func(t *testing.T) {
+		mockUser, _, _, svc := setupAuthService(t)
+		mockUser.EXPECT().
+			CreateUser(gomock.Any(), validPhone).
+			Return(errDependencyUserCreate)
+
+		res, err := svc.Register(ctx, validPhone)
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, errDependencyUserCreate) {
+			t.Fatalf("expected dependency error, got %v", err)
+		}
+	})
+
+	t.Run("dependency_error_otp_service", func(t *testing.T) {
+		mockUser, mockOTP, _, svc := setupAuthService(t)
+		mockUser.EXPECT().
+			CreateUser(gomock.Any(), validPhone).
+			Return(nil)
+		mockOTP.EXPECT().
+			GenerateOTP(gomock.Any(), validPhone).
+			Return(errDependencyOTPGenerate)
+
+		res, err := svc.Register(ctx, validPhone)
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, errDependencyOTPGenerate) {
+			t.Fatalf("expected dependency error, got %v", err)
+		}
+	})
+
+	t.Run("context_cancelled", func(t *testing.T) {
+		_, _, _, svc := setupAuthService(t)
+		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		res, err := svc.Register(cancelledCtx, validPhone)
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
 		}
 	})
 }
 
 func TestAuthService_RequestOTP(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	ctx := context.Background()
 
-	t.Run("Success - OTP berhasil dikirim", func(t *testing.T) {
-		otpService := &MockOTPService{
-			GenerateOTPFunc: func(ctx context.Context, contact string) error {
-				if contact != "08123456789" {
-					t.Errorf("Expected contact '08123456789', got %s", contact)
-				}
-				return nil
-			},
-		}
-		service := &authServiceImpl{otpService: otpService}
+	t.Run("success_sends_otp", func(t *testing.T) {
+		_, mockOTP, _, svc := setupAuthService(t)
+		mockOTP.EXPECT().
+			GenerateOTP(gomock.Any(), validPhone).
+			Return(nil)
 
-		res, err := service.RequestOTP(context.Background(), "08123456789")
-
+		res, err := svc.RequestOTP(ctx, validPhone)
 		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
+			t.Fatalf("RequestOTP: %v", err)
 		}
-		if res.Status != "success" || res.Message != "OTP dikirim" {
-			t.Errorf("Expected success response, got %v", res)
+		if res == nil || res.Status != "success" {
+			t.Fatalf("RequestOTP: got res %#v", res)
 		}
 	})
 
-	t.Run("Error - Input kosong", func(t *testing.T) {
-		otpService := &MockOTPService{
-			GenerateOTPFunc: func(ctx context.Context, contact string) error {
-				t.Fatal("OTPService should not be called when input is empty")
-				return nil
-			},
+	t.Run("validation_error_missing_contact", func(t *testing.T) {
+		_, _, _, svc := setupAuthService(t)
+		res, err := svc.RequestOTP(ctx, "")
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
 		}
-		service := &authServiceImpl{otpService: otpService}
-
-		res, err := service.RequestOTP(context.Background(), "")
-
-		if err == nil {
-			t.Fatal("Expected error, got nil")
+		if !errors.Is(err, service.ErrContactRequired) {
+			t.Fatalf("expected ErrContactRequired, got %v", err)
 		}
-		if res == nil || res.Status != "failed" || res.Message != "input required" {
-			t.Errorf("Expected failed response due to empty input, got %v", res)
+	})
+
+	t.Run("validation_error_invalid_contact_format", func(t *testing.T) {
+		_, _, _, svc := setupAuthService(t)
+		res, err := svc.RequestOTP(ctx, "@@@")
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, service.ErrContactInvalidFormat) {
+			t.Fatalf("expected ErrContactInvalidFormat, got %v", err)
+		}
+	})
+
+	t.Run("dependency_error_otp_service", func(t *testing.T) {
+		_, mockOTP, _, svc := setupAuthService(t)
+		mockOTP.EXPECT().
+			GenerateOTP(gomock.Any(), validPhone).
+			Return(errDependencyOTPGenerate)
+
+		res, err := svc.RequestOTP(ctx, validPhone)
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, errDependencyOTPGenerate) {
+			t.Fatalf("expected dependency error, got %v", err)
+		}
+	})
+
+	t.Run("context_cancelled", func(t *testing.T) {
+		_, _, _, svc := setupAuthService(t)
+		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		res, err := svc.RequestOTP(cancelledCtx, validPhone)
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
 		}
 	})
 }
 
-func TestAuthService_VerifyOTPAndLogin(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+func TestAuthService_VerifyOTP(t *testing.T) {
+	ctx := context.Background()
 
-	t.Run("Success - Login berhasil", func(t *testing.T) {
-		otpService := &MockOTPService{
-			VerifyOTPFunc: func(ctx context.Context, contact, otpCode string) (bool, error) {
-				return true, nil // OTP Valid
-			},
-		}
-		tokenGenerator := &MockTokenGenerator{
-			GenerateTokenFunc: func(userID string) (string, error) {
-				return "access_token_123", nil
-			},
-		}
+	t.Run("success_returns_access_token", func(t *testing.T) {
+		mockUser, mockOTP, mockToken, svc := setupAuthService(t)
+		user := &model.User{ID: "user-123"}
+		wantToken := "access-token"
 
-		service := &authServiceImpl{otpService: otpService, tokenGenerator: tokenGenerator}
+		mockOTP.EXPECT().
+			VerifyOTP(gomock.Any(), validPhone, validOTP).
+			Return(true, nil)
+		mockUser.EXPECT().
+			GetUser(gomock.Any(), validPhone).
+			Return(user, nil)
+		mockToken.EXPECT().
+			GenerateToken(user.ID).
+			Return(wantToken, nil)
 
-		res, err := service.VerifyOTP(context.Background(), "08123456789", "123456")
-
+		res, err := svc.VerifyOTP(ctx, validPhone, validOTP)
 		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
+			t.Fatalf("VerifyOTP: %v", err)
 		}
-		if res.Status != "success" || res.Message != "login berhasil" {
-			t.Errorf("Expected success response, got %v", res)
-		}
-		if res.AccessToken != "access_token_123" {
-			t.Errorf("Expected AccessToken, got %s", res.AccessToken)
+		if res == nil || res.Status != "success" || res.AccessToken != wantToken {
+			t.Fatalf("VerifyOTP: got %#v", res)
 		}
 	})
 
-	t.Run("Error - OTP tidak valid", func(t *testing.T) {
-		otpService := &MockOTPService{
-			VerifyOTPFunc: func(ctx context.Context, contact, otpCode string) (bool, error) {
-				return false, errors.New("invalid code") // OTP Invalid
-			},
+	t.Run("validation_error_missing_inputs", func(t *testing.T) {
+		_, _, _, svc := setupAuthService(t)
+		res, err := svc.VerifyOTP(ctx, validPhone, "")
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
 		}
-		tokenGenerator := &MockTokenGenerator{
-			GenerateTokenFunc: func(userID string) (string, error) {
-				t.Fatal("Token generator should not be called if OTP is invalid")
-				return "", nil
-			},
+		if !errors.Is(err, service.ErrInputRequired) {
+			t.Fatalf("expected ErrInputRequired, got %v", err)
 		}
+	})
 
-		service := &authServiceImpl{otpService: otpService, tokenGenerator: tokenGenerator}
-
-		res, err := service.VerifyOTP(context.Background(), "08123456789", "999999")
-
-		if err == nil {
-			t.Fatal("Expected error, got nil")
+	t.Run("validation_error_invalid_contact_format", func(t *testing.T) {
+		_, _, _, svc := setupAuthService(t)
+		res, err := svc.VerifyOTP(ctx, "bad-contact", validOTP)
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
 		}
-		if res == nil || res.Status != "failed" || res.Message != "OTP tidak valid" {
-			t.Errorf("Expected failed response due to invalid OTP, got %v", res)
+		if !errors.Is(err, service.ErrContactInvalidFormat) {
+			t.Fatalf("expected ErrContactInvalidFormat, got %v", err)
+		}
+	})
+
+	t.Run("dependency_error_otp_service", func(t *testing.T) {
+		_, mockOTP, _, svc := setupAuthService(t)
+		mockOTP.EXPECT().
+			VerifyOTP(gomock.Any(), validPhone, validOTP).
+			Return(false, errDependencyOTPVerify)
+
+		res, err := svc.VerifyOTP(ctx, validPhone, validOTP)
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, errDependencyOTPVerify) {
+			t.Fatalf("expected dependency error, got %v", err)
+		}
+	})
+
+	t.Run("otp_not_valid_returns_ErrOTPInvalid", func(t *testing.T) {
+		_, mockOTP, _, svc := setupAuthService(t)
+		mockOTP.EXPECT().
+			VerifyOTP(gomock.Any(), validPhone, "wrong").
+			Return(false, nil)
+
+		res, err := svc.VerifyOTP(ctx, validPhone, "wrong")
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, service.ErrOTPInvalid) {
+			t.Fatalf("expected ErrOTPInvalid, got %v", err)
+		}
+	})
+
+	t.Run("not_found_user_nil_after_valid_otp", func(t *testing.T) {
+		mockUser, mockOTP, _, svc := setupAuthService(t)
+		mockOTP.EXPECT().
+			VerifyOTP(gomock.Any(), validPhone, validOTP).
+			Return(true, nil)
+		mockUser.EXPECT().
+			GetUser(gomock.Any(), validPhone).
+			Return(nil, nil)
+
+		res, err := svc.VerifyOTP(ctx, validPhone, validOTP)
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, service.ErrUserNotFound) {
+			t.Fatalf("expected ErrUserNotFound, got %v", err)
+		}
+	})
+
+	t.Run("dependency_error_user_service_on_get", func(t *testing.T) {
+		mockUser, mockOTP, _, svc := setupAuthService(t)
+
+		mockOTP.EXPECT().
+			VerifyOTP(gomock.Any(), validPhone, validOTP).
+			Return(true, nil)
+		mockUser.EXPECT().
+			GetUser(gomock.Any(), validPhone).
+			Return(nil, errDependencyUserGet)
+
+		res, err := svc.VerifyOTP(ctx, validPhone, validOTP)
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, errDependencyUserGet) {
+			t.Fatalf("expected dependency error, got %v", err)
+		}
+	})
+
+	t.Run("error_user_record_without_id", func(t *testing.T) {
+		mockUser, mockOTP, _, svc := setupAuthService(t)
+
+		mockOTP.EXPECT().
+			VerifyOTP(gomock.Any(), validPhone, validOTP).
+			Return(true, nil)
+		mockUser.EXPECT().
+			GetUser(gomock.Any(), validPhone).
+			Return(&model.User{ID: ""}, nil)
+
+		res, err := svc.VerifyOTP(ctx, validPhone, validOTP)
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, service.ErrUserIDMissing) {
+			t.Fatalf("expected ErrUserIDMissing, got %v", err)
+		}
+	})
+
+	t.Run("dependency_error_token_generator", func(t *testing.T) {
+		mockUser, mockOTP, mockToken, svc := setupAuthService(t)
+		user := &model.User{ID: "user-123"}
+
+		mockOTP.EXPECT().
+			VerifyOTP(gomock.Any(), validPhone, validOTP).
+			Return(true, nil)
+		mockUser.EXPECT().
+			GetUser(gomock.Any(), validPhone).
+			Return(user, nil)
+		mockToken.EXPECT().
+			GenerateToken(user.ID).
+			Return("", errDependencyTokenGenerate)
+
+		res, err := svc.VerifyOTP(ctx, validPhone, validOTP)
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, errDependencyTokenGenerate) {
+			t.Fatalf("expected dependency error, got %v", err)
+		}
+	})
+
+	t.Run("context_cancelled", func(t *testing.T) {
+		_, _, _, svc := setupAuthService(t)
+		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		res, err := svc.VerifyOTP(cancelledCtx, validPhone, validOTP)
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
 		}
 	})
 }
 
 func TestAuthService_ValidateToken(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	ctx := context.Background()
 
-	t.Run("Success - Token valid", func(t *testing.T) {
-		tokenGen := &MockTokenGenerator{
-			ValidateTokenFunc: func(token string) (bool, error) {
-				if token != "valid_token" {
-					t.Errorf("Expected 'valid_token', got %s", token)
-				}
-				return true, nil
-			},
-		}
+	t.Run("success_token_valid", func(t *testing.T) {
+		_, _, mockToken, svc := setupAuthService(t)
+		token := "signed-token"
+		mockToken.EXPECT().
+			ValidateToken(token).
+			Return(true, nil)
 
-		service := &authServiceImpl{tokenGenerator: tokenGen}
-		res, err := service.ValidateToken(context.Background(), "valid_token")
-
+		res, err := svc.ValidateToken(ctx, token)
 		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
+			t.Fatalf("ValidateToken: %v", err)
 		}
-		if res.Status != "valid" || res.Message != "token valid" {
-			t.Errorf("Expected valid token response, got %v", res)
+		if res == nil || res.Status != "valid" {
+			t.Fatalf("ValidateToken: got %#v", res)
 		}
 	})
 
-	t.Run("Error - Token tidak valid", func(t *testing.T) {
-		tokenGen := &MockTokenGenerator{
-			ValidateTokenFunc: func(token string) (bool, error) {
-				return false, errors.New("token expired")
-			},
-		}
+	t.Run("validation_empty_token_marked_invalid_without_dependency_call", func(t *testing.T) {
+		_, _, _, svc := setupAuthService(t)
+		// No TokenGenerator EXPECT — service short-circuits on empty token.
 
-		service := &authServiceImpl{tokenGenerator: tokenGen}
-		res, err := service.ValidateToken(context.Background(), "invalid_token")
-
-		if err == nil {
-			t.Fatal("Expected error, got nil")
+		res, err := svc.ValidateToken(ctx, "")
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
 		}
-		if res == nil || res.Status != "invalid" || res.Message != "token tidak valid" {
-			t.Errorf("Expected invalid token response, got %v", res)
+		if res == nil || res.Status != "invalid" {
+			t.Fatalf("expected invalid status, got %#v", res)
+		}
+	})
+
+	t.Run("dependency_error_token_validator", func(t *testing.T) {
+		_, _, mockToken, svc := setupAuthService(t)
+		token := "any-token"
+		mockToken.EXPECT().
+			ValidateToken(token).
+			Return(false, errDependencyTokenValidate)
+
+		res, err := svc.ValidateToken(ctx, token)
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, errDependencyTokenValidate) {
+			t.Fatalf("expected dependency error, got %v", err)
+		}
+	})
+
+	t.Run("invalid_token_response_without_error", func(t *testing.T) {
+		_, _, mockToken, svc := setupAuthService(t)
+		token := "expired-token"
+		mockToken.EXPECT().
+			ValidateToken(token).
+			Return(false, nil)
+
+		res, err := svc.ValidateToken(ctx, token)
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if res == nil || res.Status != "invalid" {
+			t.Fatalf("expected invalid status, got %#v", res)
+		}
+	})
+
+	t.Run("context_cancelled", func(t *testing.T) {
+		_, _, _, svc := setupAuthService(t)
+		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		res, err := svc.ValidateToken(cancelledCtx, "any-token")
+		if res != nil {
+			t.Fatalf("expected nil response, got %#v", res)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
 		}
 	})
 }

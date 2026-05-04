@@ -1,27 +1,133 @@
-// Package service implements the business logic for otp-service.
 package service
 
-import "context"
+import (
+	"context"
+	"errors"
+	"strings"
+	"time"
 
-// OTPService defines the interface for otp-service business logic.
+	"furab-backend/services/otp-service/internal/model"
+	"furab-backend/services/otp-service/internal/repository"
+)
+
+type OTP = model.OTP
+
+var (
+	ErrContactRequired = errors.New("contact required")
+	ErrOTPRequired     = errors.New("otp required")
+	ErrOTPInvalid      = errors.New("otp invalid")
+	ErrOTPExpired      = errors.New("otp expired")
+	ErrOTPNotFound     = errors.New("otp not found")
+)
+
+type GenerateOTPRequest struct {
+	Contact string
+}
+
+type GenerateOTPResponse struct {
+	OTPCode string
+	Message string
+}
+
+type VerifyOTPRequest struct {
+	Contact string
+	Code    string
+}
+
+type VerifyOTPResponse struct {
+	Valid   bool
+	Message string
+}
+
 type OTPService interface {
-
-	// SendOTP implements the business logic for SendOTP.
-	SendOTP(ctx context.Context) error
-
-	// VerifyOTP implements the business logic for VerifyOTP.
-	VerifyOTP(ctx context.Context) error
-
-	// ResendOTP implements the business logic for ResendOTP.
-	ResendOTP(ctx context.Context) error
+	GenerateOTP(ctx context.Context, req GenerateOTPRequest) (*GenerateOTPResponse, error)
+	VerifyOTP(ctx context.Context, req VerifyOTPRequest) (*VerifyOTPResponse, error)
 }
 
-// otpServiceImpl is the concrete implementation of OTPService.
 type otpServiceImpl struct {
-	// TODO: add repository and event publisher dependencies
+	repo repository.OTPRepository
 }
 
-// NewOTPService creates a new OTPService.
-func NewOTPService() OTPService {
-	return &otpServiceImpl{}
+func NewOTPService(repo repository.OTPRepository) OTPService {
+	return &otpServiceImpl{repo: repo}
+}
+
+func normalizeInput(input string) string {
+	return strings.TrimSpace(input)
+}
+
+func validateContact(contact string) error {
+	if contact == "" {
+		return ErrContactRequired
+	}
+	return nil
+}
+
+func validateOTP(code string) error {
+	if code == "" {
+		return ErrOTPRequired
+	}
+	return nil
+}
+
+func (s *otpServiceImpl) GenerateOTP(ctx context.Context, req GenerateOTPRequest) (*GenerateOTPResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	req.Contact = normalizeInput(req.Contact)
+	if err := validateContact(req.Contact); err != nil {
+		return nil, err
+	}
+
+	otp := &OTP{
+		Phone:     req.Contact,
+		Code:      "123456", // TODO: generate random OTP
+		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+	}
+
+	if err := s.repo.Save(ctx, otp); err != nil {
+		return nil, err
+	}
+
+	return &GenerateOTPResponse{
+		OTPCode: otp.Code,
+		Message: "OTP generated",
+	}, nil
+}
+
+func (s *otpServiceImpl) VerifyOTP(ctx context.Context, req VerifyOTPRequest) (*VerifyOTPResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	req.Contact = normalizeInput(req.Contact)
+	req.Code = normalizeInput(req.Code)
+	if err := validateContact(req.Contact); err != nil {
+		return nil, err
+	}
+	if err := validateOTP(req.Code); err != nil {
+		return nil, err
+	}
+
+	otp, err := s.repo.FindByPhone(ctx, req.Contact)
+	if err != nil {
+		return nil, err
+	}
+	if otp == nil {
+		return nil, ErrOTPNotFound
+	}
+
+	if otp.Code != req.Code {
+		return nil, ErrOTPInvalid
+	}
+
+	if time.Now().Unix() > otp.ExpiresAt {
+		return nil, ErrOTPExpired
+	}
+
+	return &VerifyOTPResponse{
+		Valid:   true,
+		Message: "OTP valid",
+	}, nil
 }

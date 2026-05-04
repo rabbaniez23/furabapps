@@ -16,6 +16,11 @@ type OTPVerification struct {
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	// TODO: Add OTPVerification-specific fields
 }
 
+// OTP represents the core OTP entity.
+type OTP struct {
+	Phone     string
+	Code      string
+	ExpiresAt int64
+}

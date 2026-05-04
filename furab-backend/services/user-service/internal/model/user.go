@@ -16,6 +16,13 @@ type UserAddress struct {
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	// TODO: Add UserAddress-specific fields
 }
 
+// User represents the core user entity.
+type User struct {
+	UserID string
+	Name   string
+	Email  string
+	Phone  string
+	Status string
+}
