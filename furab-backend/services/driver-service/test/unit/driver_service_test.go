@@ -1,452 +1,457 @@
+// Package unit contains unit tests for the driver service.
+// All dependencies are mocked using gomock. No database access.
 package unit
 
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
+
+	"furab-backend/services/driver-service/internal/model"
+	"furab-backend/services/driver-service/internal/repository"
+	mock_repository "furab-backend/services/driver-service/internal/repository/mock"
+	"furab-backend/services/driver-service/internal/service"
 
 	"go.uber.org/mock/gomock"
 )
 
-// ============================================================================
-// Catatan: Struct dan interface di bawah ini adalah representasi dari desain.
-// Pada proyek nyata, definisi ini akan berada di internal/model dan internal/service.
-// Mock akan digenerate otomatis menggunakan gomock (mockgen).
-// ============================================================================
+// --- Helper Functions ---
 
-// 1. Models & DTOs
-
-type Driver struct {
-	DriverID    string
-	Name        string
-	Phone       string
-	VehicleType string
-	Status      string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+func newTestService(t *testing.T) (service.DriverService, *mock_repository.MockDriverRepository, *gomock.Controller) {
+	ctrl := gomock.NewController(t)
+	mockRepo := mock_repository.NewMockDriverRepository(ctrl)
+	svc := service.NewDriverService(mockRepo)
+	return svc, mockRepo, ctrl
 }
 
-type CreateDriverRequest struct {
-	DriverID    string
-	Name        string
-	Phone       string
-	VehicleType string
-}
-
-type UpdateDriverRequest struct {
-	Name        string
-	Phone       string
-	VehicleType string
-}
-
-type DriverResponse struct {
-	Status  string
-	Message string
-}
-
-// 2. Mocked Repository Interface
-
-type MockDriverRepository struct {
-	SaveFunc           func(ctx context.Context, driver *Driver) error
-	FindByIDFunc       func(ctx context.Context, driverID string) (*Driver, error)
-	UpdateFunc         func(ctx context.Context, driver *Driver) error
-	UpdateStatusFunc   func(ctx context.Context, driverID, status string) error
-	UpdateLocationFunc func(ctx context.Context, driverID string, lat, long float64) error
-}
-
-func (m *MockDriverRepository) Save(ctx context.Context, driver *Driver) error {
-	if m.SaveFunc != nil {
-		return m.SaveFunc(ctx, driver)
+func sampleDriver() *model.Driver {
+	return &model.Driver{
+		DriverID:    "driver-123",
+		Name:        "John Driver",
+		Phone:       "081234567890",
+		VehicleType: "motorcycle",
+		Status:      model.DriverStatusOffline,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
 	}
-	return nil
 }
 
-func (m *MockDriverRepository) FindByID(ctx context.Context, driverID string) (*Driver, error) {
-	if m.FindByIDFunc != nil {
-		return m.FindByIDFunc(ctx, driverID)
-	}
-	return nil, nil
-}
+// ========================================
+// CreateDriver
+// ========================================
 
-func (m *MockDriverRepository) Update(ctx context.Context, driver *Driver) error {
-	if m.UpdateFunc != nil {
-		return m.UpdateFunc(ctx, driver)
-	}
-	return nil
-}
+func TestCreateDriver_Success(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
 
-func (m *MockDriverRepository) UpdateStatus(ctx context.Context, driverID, status string) error {
-	if m.UpdateStatusFunc != nil {
-		return m.UpdateStatusFunc(ctx, driverID, status)
-	}
-	return nil
-}
+	ctx := context.Background()
+	mockRepo.EXPECT().Save(ctx, gomock.Any()).Return(nil)
 
-func (m *MockDriverRepository) UpdateLocation(ctx context.Context, driverID string, lat, long float64) error {
-	if m.UpdateLocationFunc != nil {
-		return m.UpdateLocationFunc(ctx, driverID, lat, long)
-	}
-	return nil
-}
+	resp, err := svc.CreateDriver(ctx, &model.CreateDriverRequest{
+		DriverID:    "driver-123",
+		Name:        "John Driver",
+		Phone:       "081234567890",
+		VehicleType: "motorcycle",
+	})
 
-// 3. DriverService Interface & Implementation
-
-type DriverService interface {
-	CreateDriver(ctx context.Context, req CreateDriverRequest) (*DriverResponse, error)
-	GetDriver(ctx context.Context, driverID string) (*Driver, error)
-	UpdateDriver(ctx context.Context, driverID string, req UpdateDriverRequest) (*DriverResponse, error)
-	UpdateStatus(ctx context.Context, driverID, status string) (*DriverResponse, error)
-	UpdateLocation(ctx context.Context, driverID string, lat, long float64) (*DriverResponse, error)
-}
-
-type driverServiceImpl struct {
-	repo *MockDriverRepository
-}
-
-func (s *driverServiceImpl) CreateDriver(ctx context.Context, req CreateDriverRequest) (*DriverResponse, error) {
-	if req.Name == "" || req.Phone == "" || req.VehicleType == "" {
-		return &DriverResponse{Status: "failed", Message: "validation error"}, errors.New("validation error")
-	}
-
-	driver := &Driver{
-		DriverID:    req.DriverID,
-		Name:        req.Name,
-		Phone:       req.Phone,
-		VehicleType: req.VehicleType,
-		Status:      "offline",
-	}
-
-	if err := s.repo.Save(ctx, driver); err != nil {
-		return &DriverResponse{Status: "failed", Message: "db error"}, err
-	}
-
-	return &DriverResponse{Status: "success", Message: "driver berhasil dibuat"}, nil
-}
-
-func (s *driverServiceImpl) GetDriver(ctx context.Context, driverID string) (*Driver, error) {
-	driver, err := s.repo.FindByID(ctx, driverID)
 	if err != nil {
-		return nil, err
+		t.Fatalf("expected no error, got: %v", err)
 	}
-	if driver == nil {
-		return nil, errors.New("driver not found")
+	if resp.Status != "success" {
+		t.Errorf("expected success, got: %s", resp.Status)
 	}
-	return driver, nil
+	if resp.DriverID != "driver-123" {
+		t.Errorf("expected driver-123, got: %s", resp.DriverID)
+	}
 }
 
-func (s *driverServiceImpl) UpdateDriver(ctx context.Context, driverID string, req UpdateDriverRequest) (*DriverResponse, error) {
-	driver, err := s.repo.FindByID(ctx, driverID)
+func TestCreateDriver_NilRequest(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	_, err := svc.CreateDriver(context.Background(), nil)
+	if err != service.ErrInvalidRequest {
+		t.Fatalf("expected ErrInvalidRequest, got: %v", err)
+	}
+}
+
+func TestCreateDriver_EmptyDriverID(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	_, err := svc.CreateDriver(context.Background(), &model.CreateDriverRequest{
+		Name: "John", Phone: "08123", VehicleType: "car",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty driver_id")
+	}
+}
+
+func TestCreateDriver_EmptyName(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	_, err := svc.CreateDriver(context.Background(), &model.CreateDriverRequest{
+		DriverID: "d1", Phone: "08123", VehicleType: "car",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty name")
+	}
+}
+
+func TestCreateDriver_RepositoryError(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	repoErr := errors.New("db error")
+	mockRepo.EXPECT().Save(gomock.Any(), gomock.Any()).Return(repoErr)
+
+	_, err := svc.CreateDriver(context.Background(), &model.CreateDriverRequest{
+		DriverID: "d1", Name: "John", Phone: "08123", VehicleType: "car",
+	})
+	if !errors.Is(err, repoErr) {
+		t.Fatalf("expected repo error, got: %v", err)
+	}
+}
+
+func TestCreateDriver_DefaultStatusOffline(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	mockRepo.EXPECT().Save(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, driver *model.Driver) error {
+			if driver.Status != model.DriverStatusOffline {
+				t.Errorf("expected OFFLINE status, got: %s", driver.Status)
+			}
+			return nil
+		})
+
+	_, err := svc.CreateDriver(context.Background(), &model.CreateDriverRequest{
+		DriverID: "d1", Name: "John", Phone: "08123", VehicleType: "car",
+	})
 	if err != nil {
-		return nil, err
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if driver == nil {
-		return nil, errors.New("driver not found")
-	}
-
-	driver.Name = req.Name
-	driver.Phone = req.Phone
-	driver.VehicleType = req.VehicleType
-
-	if err := s.repo.Update(ctx, driver); err != nil {
-		return nil, err
-	}
-
-	return &DriverResponse{Status: "success", Message: "update berhasil"}, nil
 }
 
-func (s *driverServiceImpl) UpdateStatus(ctx context.Context, driverID, status string) (*DriverResponse, error) {
-	driver, err := s.repo.FindByID(ctx, driverID)
+// ========================================
+// GetDriver
+// ========================================
+
+func TestGetDriver_Success(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	expected := sampleDriver()
+	mockRepo.EXPECT().FindByID(gomock.Any(), expected.DriverID).Return(expected, nil)
+
+	driver, err := svc.GetDriver(context.Background(), expected.DriverID)
 	if err != nil {
-		return nil, err
+		t.Fatalf("expected no error, got: %v", err)
 	}
-	if driver == nil {
-		return nil, errors.New("driver not found")
+	if driver.DriverID != expected.DriverID {
+		t.Errorf("expected %s, got: %s", expected.DriverID, driver.DriverID)
 	}
-
-	if err := s.repo.UpdateStatus(ctx, driverID, status); err != nil {
-		return nil, err
-	}
-
-	return &DriverResponse{Status: "success", Message: "status berhasil diperbarui"}, nil
 }
 
-func (s *driverServiceImpl) UpdateLocation(ctx context.Context, driverID string, lat, long float64) (*DriverResponse, error) {
-	driver, err := s.repo.FindByID(ctx, driverID)
+func TestGetDriver_NotFound(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	mockRepo.EXPECT().FindByID(gomock.Any(), "unknown").Return(nil, repository.ErrDriverNotFound)
+
+	_, err := svc.GetDriver(context.Background(), "unknown")
+	if err != service.ErrDriverNotFound {
+		t.Fatalf("expected ErrDriverNotFound, got: %v", err)
+	}
+}
+
+func TestGetDriver_EmptyID(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	_, err := svc.GetDriver(context.Background(), "")
+	if err != service.ErrInvalidRequest {
+		t.Fatalf("expected ErrInvalidRequest, got: %v", err)
+	}
+}
+
+// ========================================
+// UpdateDriver
+// ========================================
+
+func TestUpdateDriver_Success(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	existing := sampleDriver()
+	mockRepo.EXPECT().FindByID(gomock.Any(), existing.DriverID).Return(existing, nil)
+	mockRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
+
+	resp, err := svc.UpdateDriver(context.Background(), existing.DriverID, &model.UpdateDriverRequest{
+		Name: "Jane", Phone: "089876", VehicleType: "car",
+	})
 	if err != nil {
-		return nil, err
+		t.Fatalf("expected no error, got: %v", err)
 	}
-	if driver == nil {
-		return nil, errors.New("driver not found")
+	if resp.Status != "success" {
+		t.Errorf("expected success, got: %s", resp.Status)
 	}
+}
 
-	if err := s.repo.UpdateLocation(ctx, driverID, lat, long); err != nil {
-		return nil, err
+func TestUpdateDriver_NotFound(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	mockRepo.EXPECT().FindByID(gomock.Any(), "unknown").Return(nil, repository.ErrDriverNotFound)
+
+	_, err := svc.UpdateDriver(context.Background(), "unknown", &model.UpdateDriverRequest{
+		Name: "Jane", Phone: "089876", VehicleType: "car",
+	})
+	if err != service.ErrDriverNotFound {
+		t.Fatalf("expected ErrDriverNotFound, got: %v", err)
 	}
-
-	return &DriverResponse{Status: "success", Message: "lokasi berhasil diperbarui"}, nil
 }
 
-// ============================================================================
-// UNIT TESTS MULAI DARI SINI
-// ============================================================================
-
-func TestDriverService_CreateDriver(t *testing.T) {
-	ctrl := gomock.NewController(t)
+func TestUpdateDriver_EmptyDriverID(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
-	t.Run("Success - Driver berhasil dibuat", func(t *testing.T) {
-		repo := &MockDriverRepository{
-			SaveFunc: func(ctx context.Context, driver *Driver) error {
-				if driver.DriverID != "1" || driver.Name != "Driver A" || driver.Phone != "08123" || driver.VehicleType != "motor" {
-					t.Errorf("Unexpected driver data saved: %+v", driver)
-				}
-				return nil
-			},
-		}
-		service := &driverServiceImpl{repo: repo}
-
-		req := CreateDriverRequest{
-			DriverID:    "1",
-			Name:        "Driver A",
-			Phone:       "08123",
-			VehicleType: "motor",
-		}
-
-		res, err := service.CreateDriver(context.Background(), req)
-
-		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
-		}
-		if res.Status != "success" || res.Message != "driver berhasil dibuat" {
-			t.Errorf("Expected success response, got %+v", res)
-		}
+	_, err := svc.UpdateDriver(context.Background(), "", &model.UpdateDriverRequest{
+		Name: "Jane", Phone: "089876", VehicleType: "car",
 	})
-
-	t.Run("Error - Data tidak lengkap", func(t *testing.T) {
-		repo := &MockDriverRepository{
-			SaveFunc: func(ctx context.Context, driver *Driver) error {
-				t.Fatal("Repository Save() should not be called")
-				return nil
-			},
-		}
-		service := &driverServiceImpl{repo: repo}
-
-		req := CreateDriverRequest{
-			DriverID:    "1",
-			Name:        "", // Kosong memicu error
-			Phone:       "08123",
-			VehicleType: "motor",
-		}
-
-		res, err := service.CreateDriver(context.Background(), req)
-
-		if err == nil {
-			t.Fatal("Expected error, got nil")
-		}
-		if res == nil || res.Status != "failed" || res.Message != "validation error" {
-			t.Errorf("Expected failed response, got %+v", res)
-		}
-	})
+	if err != service.ErrInvalidRequest {
+		t.Fatalf("expected ErrInvalidRequest, got: %v", err)
+	}
 }
 
-func TestDriverService_GetDriver(t *testing.T) {
-	ctrl := gomock.NewController(t)
+func TestUpdateDriver_NilRequest(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
-	t.Run("Success - Driver ditemukan", func(t *testing.T) {
-		repo := &MockDriverRepository{
-			FindByIDFunc: func(ctx context.Context, driverID string) (*Driver, error) {
-				if driverID != "1" {
-					t.Errorf("Expected DriverID '1', got %s", driverID)
-				}
-				return &Driver{DriverID: "1", Name: "Driver A"}, nil
-			},
-		}
-		service := &driverServiceImpl{repo: repo}
-
-		driver, err := service.GetDriver(context.Background(), "1")
-
-		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
-		}
-		if driver == nil || driver.DriverID != "1" {
-			t.Errorf("Expected Driver 1, got %+v", driver)
-		}
-	})
-
-	t.Run("Error - Driver tidak ditemukan", func(t *testing.T) {
-		repo := &MockDriverRepository{
-			FindByIDFunc: func(ctx context.Context, driverID string) (*Driver, error) {
-				return nil, errors.New("driver not found")
-			},
-		}
-		service := &driverServiceImpl{repo: repo}
-
-		driver, err := service.GetDriver(context.Background(), "99")
-
-		if err == nil || err.Error() != "driver not found" {
-			t.Fatalf("Expected 'driver not found' error, got %v", err)
-		}
-		if driver != nil {
-			t.Errorf("Expected nil driver, got %+v", driver)
-		}
-	})
+	_, err := svc.UpdateDriver(context.Background(), "d1", nil)
+	if err != service.ErrInvalidRequest {
+		t.Fatalf("expected ErrInvalidRequest, got: %v", err)
+	}
 }
 
-func TestDriverService_UpdateDriver(t *testing.T) {
-	ctrl := gomock.NewController(t)
+func TestUpdateDriver_EmptyName(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
-	t.Run("Success - Data berhasil diupdate", func(t *testing.T) {
-		repo := &MockDriverRepository{
-			FindByIDFunc: func(ctx context.Context, driverID string) (*Driver, error) {
-				return &Driver{DriverID: "1", Name: "Old Name"}, nil
-			},
-			UpdateFunc: func(ctx context.Context, driver *Driver) error {
-				if driver.Name != "Driver Update" || driver.Phone != "08124" || driver.VehicleType != "mobil" {
-					t.Errorf("Unexpected updated driver data: %+v", driver)
-				}
-				return nil
-			},
-		}
-		service := &driverServiceImpl{repo: repo}
-
-		req := UpdateDriverRequest{
-			Name:        "Driver Update",
-			Phone:       "08124",
-			VehicleType: "mobil",
-		}
-
-		res, err := service.UpdateDriver(context.Background(), "1", req)
-
-		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
-		}
-		if res.Status != "success" || res.Message != "update berhasil" {
-			t.Errorf("Expected success response, got %+v", res)
-		}
+	_, err := svc.UpdateDriver(context.Background(), "d1", &model.UpdateDriverRequest{
+		Name: "", Phone: "08123", VehicleType: "car",
 	})
-
-	t.Run("Error - Driver tidak ditemukan", func(t *testing.T) {
-		repo := &MockDriverRepository{
-			FindByIDFunc: func(ctx context.Context, driverID string) (*Driver, error) {
-				return nil, errors.New("driver not found")
-			},
-			UpdateFunc: func(ctx context.Context, driver *Driver) error {
-				t.Fatal("Repository Update() should not be called")
-				return nil
-			},
-		}
-		service := &driverServiceImpl{repo: repo}
-
-		req := UpdateDriverRequest{
-			Name:        "Driver Update",
-			Phone:       "08124",
-			VehicleType: "mobil",
-		}
-
-		res, err := service.UpdateDriver(context.Background(), "99", req)
-
-		if err == nil || err.Error() != "driver not found" {
-			t.Fatalf("Expected 'driver not found' error, got %v", err)
-		}
-		if res != nil {
-			t.Errorf("Expected nil response, got %+v", res)
-		}
-	})
+	if err == nil {
+		t.Fatal("expected error for empty name")
+	}
 }
 
-func TestDriverService_UpdateStatus(t *testing.T) {
-	ctrl := gomock.NewController(t)
+func TestUpdateDriver_RepositoryError(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
-	t.Run("Success - Status diupdate", func(t *testing.T) {
-		repo := &MockDriverRepository{
-			FindByIDFunc: func(ctx context.Context, driverID string) (*Driver, error) {
-				return &Driver{DriverID: "1", Status: "offline"}, nil
-			},
-			UpdateStatusFunc: func(ctx context.Context, driverID, status string) error {
-				if driverID != "1" || status != "online" {
-					t.Errorf("Unexpected driverID %s or status %s", driverID, status)
-				}
-				return nil
-			},
-		}
-		service := &driverServiceImpl{repo: repo}
+	existing := sampleDriver()
+	repoErr := errors.New("update failed")
+	mockRepo.EXPECT().FindByID(gomock.Any(), existing.DriverID).Return(existing, nil)
+	mockRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(repoErr)
 
-		res, err := service.UpdateStatus(context.Background(), "1", "online")
-
-		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
-		}
-		if res.Status != "success" || res.Message != "status berhasil diperbarui" {
-			t.Errorf("Expected success response, got %+v", res)
-		}
+	_, err := svc.UpdateDriver(context.Background(), existing.DriverID, &model.UpdateDriverRequest{
+		Name: "Jane", Phone: "089876", VehicleType: "car",
 	})
-
-	t.Run("Error - Driver tidak ditemukan", func(t *testing.T) {
-		repo := &MockDriverRepository{
-			FindByIDFunc: func(ctx context.Context, driverID string) (*Driver, error) {
-				return nil, errors.New("driver not found")
-			},
-		}
-		service := &driverServiceImpl{repo: repo}
-
-		res, err := service.UpdateStatus(context.Background(), "99", "online")
-
-		if err == nil || err.Error() != "driver not found" {
-			t.Fatalf("Expected 'driver not found' error, got %v", err)
-		}
-		if res != nil {
-			t.Errorf("Expected nil response, got %+v", res)
-		}
-	})
+	if !errors.Is(err, repoErr) {
+		t.Fatalf("expected repo error, got: %v", err)
+	}
 }
 
-func TestDriverService_UpdateLocation(t *testing.T) {
-	ctrl := gomock.NewController(t)
+// ========================================
+// UpdateStatus
+// ========================================
+
+func TestUpdateStatus_Success(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
-	t.Run("Success - Lokasi diupdate", func(t *testing.T) {
-		repo := &MockDriverRepository{
-			FindByIDFunc: func(ctx context.Context, driverID string) (*Driver, error) {
-				return &Driver{DriverID: "1"}, nil
-			},
-			UpdateLocationFunc: func(ctx context.Context, driverID string, lat, long float64) error {
-				if driverID != "1" || lat != -6.2 || long != 106.8 {
-					t.Errorf("Unexpected location update: id=%s, lat=%f, long=%f", driverID, lat, long)
-				}
-				return nil
-			},
-		}
-		service := &driverServiceImpl{repo: repo}
+	existing := sampleDriver()
+	mockRepo.EXPECT().FindByID(gomock.Any(), existing.DriverID).Return(existing, nil)
+	mockRepo.EXPECT().UpdateStatus(gomock.Any(), existing.DriverID, "ONLINE").Return(nil)
 
-		res, err := service.UpdateLocation(context.Background(), "1", -6.2, 106.8)
+	resp, err := svc.UpdateStatus(context.Background(), existing.DriverID, "ONLINE")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if resp.Status != "success" {
+		t.Errorf("expected success, got: %s", resp.Status)
+	}
+}
 
-		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
-		}
-		if res.Status != "success" || res.Message != "lokasi berhasil diperbarui" {
-			t.Errorf("Expected success response, got %+v", res)
-		}
-	})
+func TestUpdateStatus_CaseInsensitive(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
 
-	t.Run("Error - Driver tidak ditemukan", func(t *testing.T) {
-		repo := &MockDriverRepository{
-			FindByIDFunc: func(ctx context.Context, driverID string) (*Driver, error) {
-				return nil, errors.New("driver not found")
-			},
-		}
-		service := &driverServiceImpl{repo: repo}
+	existing := sampleDriver()
+	mockRepo.EXPECT().FindByID(gomock.Any(), existing.DriverID).Return(existing, nil)
+	mockRepo.EXPECT().UpdateStatus(gomock.Any(), existing.DriverID, "OFFLINE").Return(nil)
 
-		res, err := service.UpdateLocation(context.Background(), "99", -6.2, 106.8)
+	resp, err := svc.UpdateStatus(context.Background(), existing.DriverID, "offline")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if resp.Status != "success" {
+		t.Errorf("expected success, got: %s", resp.Status)
+	}
+}
 
-		if err == nil || err.Error() != "driver not found" {
-			t.Fatalf("Expected 'driver not found' error, got %v", err)
+func TestUpdateStatus_InvalidStatus(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	_, err := svc.UpdateStatus(context.Background(), "d1", "INVALID")
+	if err != service.ErrStatusInvalid {
+		t.Fatalf("expected ErrStatusInvalid, got: %v", err)
+	}
+}
+
+func TestUpdateStatus_EmptyStatus(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	_, err := svc.UpdateStatus(context.Background(), "d1", "")
+	if err != service.ErrStatusInvalid {
+		t.Fatalf("expected ErrStatusInvalid, got: %v", err)
+	}
+}
+
+func TestUpdateStatus_DriverNotFound(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	mockRepo.EXPECT().FindByID(gomock.Any(), "unknown").Return(nil, repository.ErrDriverNotFound)
+
+	_, err := svc.UpdateStatus(context.Background(), "unknown", "ONLINE")
+	if err != service.ErrDriverNotFound {
+		t.Fatalf("expected ErrDriverNotFound, got: %v", err)
+	}
+}
+
+func TestUpdateStatus_EmptyDriverID(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	_, err := svc.UpdateStatus(context.Background(), "", "ONLINE")
+	if err != service.ErrInvalidRequest {
+		t.Fatalf("expected ErrInvalidRequest, got: %v", err)
+	}
+}
+
+// ========================================
+// UpdateLocation
+// ========================================
+
+func TestUpdateLocation_Success(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	existing := sampleDriver()
+	mockRepo.EXPECT().FindByID(gomock.Any(), existing.DriverID).Return(existing, nil)
+	mockRepo.EXPECT().UpdateLocation(gomock.Any(), existing.DriverID, -6.2, 106.8).Return(nil)
+
+	resp, err := svc.UpdateLocation(context.Background(), existing.DriverID, -6.2, 106.8)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if resp.Status != "success" {
+		t.Errorf("expected success, got: %s", resp.Status)
+	}
+}
+
+func TestUpdateLocation_InvalidLatitude(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	_, err := svc.UpdateLocation(context.Background(), "d1", 91.0, 106.8)
+	if err != service.ErrLocationInvalid {
+		t.Fatalf("expected ErrLocationInvalid, got: %v", err)
+	}
+}
+
+func TestUpdateLocation_InvalidLongitude(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	_, err := svc.UpdateLocation(context.Background(), "d1", -6.2, 181.0)
+	if err != service.ErrLocationInvalid {
+		t.Fatalf("expected ErrLocationInvalid, got: %v", err)
+	}
+}
+
+func TestUpdateLocation_NaN(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	_, err := svc.UpdateLocation(context.Background(), "d1", math.NaN(), 106.8)
+	if err != service.ErrLocationInvalid {
+		t.Fatalf("expected ErrLocationInvalid, got: %v", err)
+	}
+}
+
+func TestUpdateLocation_DriverNotFound(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	mockRepo.EXPECT().FindByID(gomock.Any(), "unknown").Return(nil, repository.ErrDriverNotFound)
+
+	_, err := svc.UpdateLocation(context.Background(), "unknown", -6.2, 106.8)
+	if err != service.ErrDriverNotFound {
+		t.Fatalf("expected ErrDriverNotFound, got: %v", err)
+	}
+}
+
+func TestUpdateLocation_EmptyDriverID(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	_, err := svc.UpdateLocation(context.Background(), "", -6.2, 106.8)
+	if err != service.ErrInvalidRequest {
+		t.Fatalf("expected ErrInvalidRequest, got: %v", err)
+	}
+}
+
+func TestUpdateLocation_RepositoryError(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	existing := sampleDriver()
+	repoErr := errors.New("location update failed")
+	mockRepo.EXPECT().FindByID(gomock.Any(), existing.DriverID).Return(existing, nil)
+	mockRepo.EXPECT().UpdateLocation(gomock.Any(), existing.DriverID, -6.2, 106.8).Return(repoErr)
+
+	_, err := svc.UpdateLocation(context.Background(), existing.DriverID, -6.2, 106.8)
+	if !errors.Is(err, repoErr) {
+		t.Fatalf("expected repo error, got: %v", err)
+	}
+}
+
+// ========================================
+// Model Validation
+// ========================================
+
+func TestDriverStatus_IsValid(t *testing.T) {
+	tests := []struct {
+		status model.DriverStatus
+		valid  bool
+	}{
+		{model.DriverStatusOnline, true},
+		{model.DriverStatusOffline, true},
+		{model.DriverStatusBusy, true},
+		{model.DriverStatus("INVALID"), false},
+		{model.DriverStatus(""), false},
+	}
+	for _, tc := range tests {
+		if tc.status.IsValid() != tc.valid {
+			t.Errorf("status %q: expected IsValid=%v, got %v", tc.status, tc.valid, !tc.valid)
 		}
-		if res != nil {
-			t.Errorf("Expected nil response, got %+v", res)
-		}
-	})
+	}
 }

@@ -1,3 +1,10 @@
+// Package unit contains unit tests for the OTP service.
+// Unit tests do NOT access any database or external service.
+// All dependencies are mocked using gomock.
+//
+// Tests cover both OTP operations:
+// GenerateOTP and VerifyOTP
+// Each operation is tested for success, error, and edge cases.
 package unit
 
 import (
@@ -6,281 +13,494 @@ import (
 	"testing"
 	"time"
 
+	"furab-backend/services/otp-service/internal/model"
+	"furab-backend/services/otp-service/internal/repository"
+	mock_repository "furab-backend/services/otp-service/internal/repository/mock"
+	"furab-backend/services/otp-service/internal/service"
+
 	"go.uber.org/mock/gomock"
 )
 
-// ============================================================================
-// Catatan: Struct dan interface di bawah ini adalah representasi dari desain.
-// Pada proyek nyata, definisi ini akan berada di internal/model dan internal/service.
-// ============================================================================
+// --- Helper Functions ---
 
-type OTP struct {
-	UserID    string
-	Code      string
-	ExpiresAt int64
+// newTestService creates a new OTPService with mocked dependencies.
+func newTestService(t *testing.T) (service.OTPService, *mock_repository.MockOTPRepository, *gomock.Controller) {
+	ctrl := gomock.NewController(t)
+	mockRepo := mock_repository.NewMockOTPRepository(ctrl)
+	svc := service.NewOTPService(mockRepo)
+	return svc, mockRepo, ctrl
 }
 
-type GenerateOTPRequest struct {
-	UserID string
-	// Bisa berupa Email atau Phone
-	Contact string 
-}
-
-type VerifyOTPRequest struct {
-	UserID string
-	Code   string
-}
-
-type VerifyOTPResponse struct {
-	Valid   bool
-	Message string
-}
-
-type GenerateOTPResponse struct {
-	OTPCode string
-	Message string
-}
-
-// Representasi manual dari MockOTPRepository (seharusnya digenerate otomatis oleh gomock)
-type MockOTPRepository struct {
-	SaveFunc func(ctx context.Context, otp *OTP) error
-	FindFunc func(ctx context.Context, userID string) (*OTP, error)
-}
-
-func (m *MockOTPRepository) Save(ctx context.Context, otp *OTP) error {
-	if m.SaveFunc != nil {
-		return m.SaveFunc(ctx, otp)
+// sampleOTP returns a sample valid (non-expired) OTP for testing.
+func sampleOTP() *model.OTP {
+	return &model.OTP{
+		OTPID:     "otp-abc-123",
+		Target:    "081234567890",
+		OTPCode:   "123456",
+		ExpiredAt: time.Now().Add(5 * time.Minute),
+		CreatedAt: time.Now().UTC(),
 	}
-	return nil
 }
 
-func (m *MockOTPRepository) Find(ctx context.Context, userID string) (*OTP, error) {
-	if m.FindFunc != nil {
-		return m.FindFunc(ctx, userID)
+// expiredOTP returns a sample expired OTP for testing.
+func expiredOTP() *model.OTP {
+	return &model.OTP{
+		OTPID:     "otp-expired-123",
+		Target:    "081234567890",
+		OTPCode:   "654321",
+		ExpiredAt: time.Now().Add(-5 * time.Minute), // expired 5 minutes ago
+		CreatedAt: time.Now().Add(-10 * time.Minute),
 	}
-	return nil, nil
 }
 
-// Representasi dari OTPService yang akan di-test
-type OTPService interface {
-	GenerateOTP(ctx context.Context, req GenerateOTPRequest) (*GenerateOTPResponse, error)
-	VerifyOTP(ctx context.Context, req VerifyOTPRequest) (*VerifyOTPResponse, error)
-}
+// ========================================
+// Test Cases: GenerateOTP
+// ========================================
 
-// Implementasi Dummy Service untuk Testing
-type otpServiceImpl struct {
-	repo *MockOTPRepository
-}
+// TestGenerateOTP_Success tests generating an OTP with valid input.
+// Expected: OTP saved to repository, response with status "success".
+func TestGenerateOTP_Success(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
 
-func (s *otpServiceImpl) GenerateOTP(ctx context.Context, req GenerateOTPRequest) (*GenerateOTPResponse, error) {
-	// Validasi input kosong
-	if req.UserID == "" || req.Contact == "" {
-		return nil, errors.New("input kosong")
-	}
+	ctx := context.Background()
 
-	// Logic generate OTP (dummy untuk test)
-	generatedCode := "123456" 
+	// Expect repository Save to be called with a valid OTP
+	mockRepo.EXPECT().
+		Save(ctx, gomock.Any()).
+		DoAndReturn(func(_ context.Context, otp *model.OTP) error {
+			if otp.OTPID == "" {
+				t.Error("expected non-empty otp_id")
+			}
+			if otp.Target != "081234567890" {
+				t.Errorf("expected target 081234567890, got: %s", otp.Target)
+			}
+			if len(otp.OTPCode) != 6 {
+				t.Errorf("expected 6-digit OTP code, got: %s", otp.OTPCode)
+			}
+			if otp.ExpiredAt.Before(time.Now()) {
+				t.Error("expected future expiration time")
+			}
+			if otp.CreatedAt.IsZero() {
+				t.Error("expected non-zero created_at")
+			}
+			return nil
+		})
 
-	otp := &OTP{
-		UserID:    req.UserID,
-		Code:      generatedCode,
-		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
-	}
+	resp, err := svc.GenerateOTP(ctx, &model.GenerateOTPRequest{
+		Target: "081234567890",
+	})
 
-	// Simpan ke repository
-	if err := s.repo.Save(ctx, otp); err != nil {
-		return nil, err
-	}
-
-	return &GenerateOTPResponse{
-		OTPCode: generatedCode,
-		Message: "success",
-	}, nil
-}
-
-func (s *otpServiceImpl) VerifyOTP(ctx context.Context, req VerifyOTPRequest) (*VerifyOTPResponse, error) {
-	if req.UserID == "" || req.Code == "" {
-		return nil, errors.New("input kosong")
-	}
-
-	otp, err := s.repo.Find(ctx, req.UserID)
 	if err != nil {
-		return nil, err
+		t.Fatalf("expected no error, got: %v", err)
 	}
-	if otp == nil {
-		return nil, errors.New("OTP tidak valid")
+	if resp == nil {
+		t.Fatal("expected response, got nil")
 	}
-
-	if otp.Code != req.Code {
-		return nil, errors.New("OTP tidak valid")
+	if resp.Status != "success" {
+		t.Errorf("expected status 'success', got: %s", resp.Status)
 	}
-
-	if time.Now().Unix() > otp.ExpiresAt {
-		return nil, errors.New("OTP expired")
+	if resp.Message == "" {
+		t.Error("expected non-empty message")
 	}
-
-	return &VerifyOTPResponse{
-		Valid:   true,
-		Message: "OTP valid",
-	}, nil
 }
 
-// ============================================================================
-// UNIT TESTS MULAI DARI SINI
-// ============================================================================
-
-func TestOTPService_GenerateOTP(t *testing.T) {
-	// gomock controller
-	ctrl := gomock.NewController(t)
+// TestGenerateOTP_NilRequest tests generating an OTP with nil request.
+func TestGenerateOTP_NilRequest(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
-	t.Run("Success - input valid", func(t *testing.T) {
-		repo := &MockOTPRepository{
-			SaveFunc: func(ctx context.Context, otp *OTP) error {
-				if otp.UserID != "user-123" {
-					t.Errorf("Expected UserID 'user-123', got %s", otp.UserID)
-				}
-				if len(otp.Code) != 6 {
-					t.Errorf("Expected OTP Code to be 6 chars, got %s", otp.Code)
-				}
-				return nil // Mengembalikan nil (tidak ada error dari DB)
-			},
-		}
-
-		service := &otpServiceImpl{repo: repo}
-
-		req := GenerateOTPRequest{
-			UserID:  "user-123",
-			Contact: "user@mail.com",
-		}
-
-		res, err := service.GenerateOTP(context.Background(), req)
-
-		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
-		}
-		if res == nil {
-			t.Fatal("Expected response, got nil")
-		}
-		if res.Message != "success" {
-			t.Errorf("Expected success message, got %s", res.Message)
-		}
-	})
-
-	t.Run("Error - input kosong", func(t *testing.T) {
-		repo := &MockOTPRepository{
-			SaveFunc: func(ctx context.Context, otp *OTP) error {
-				t.Fatal("Repository Save() should not be called when validation fails")
-				return nil
-			},
-		}
-
-		service := &otpServiceImpl{repo: repo}
-
-		// Skenario: UserID kosong, atau Contact kosong
-		invalidRequests := []GenerateOTPRequest{
-			{UserID: "", Contact: "user@mail.com"},
-			{UserID: "user-123", Contact: ""},
-			{UserID: "", Contact: ""},
-		}
-
-		for _, req := range invalidRequests {
-			res, err := service.GenerateOTP(context.Background(), req)
-
-			if err == nil {
-				t.Fatalf("Expected validation error for req: %+v, got none", req)
-			}
-			if err.Error() != "input kosong" {
-				t.Errorf("Expected 'input kosong' error, got: %v", err)
-			}
-			if res != nil {
-				t.Errorf("Expected nil response, got %v", res)
-			}
-		}
-	})
+	_, err := svc.GenerateOTP(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error for nil request")
+	}
+	if err != service.ErrInvalidRequest {
+		t.Fatalf("expected ErrInvalidRequest, got: %v", err)
+	}
 }
 
-func TestOTPService_VerifyOTP(t *testing.T) {
-	ctrl := gomock.NewController(t)
+// TestGenerateOTP_EmptyTarget tests generating an OTP with empty target.
+func TestGenerateOTP_EmptyTarget(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
 	defer ctrl.Finish()
 
-	t.Run("Success - OTP valid", func(t *testing.T) {
-		repo := &MockOTPRepository{
-			FindFunc: func(ctx context.Context, userID string) (*OTP, error) {
-				return &OTP{
-					UserID:    "user-123",
-					Code:      "123456",
-					ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
-				}, nil
-			},
-		}
+	_, err := svc.GenerateOTP(context.Background(), &model.GenerateOTPRequest{
+		Target: "",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty target")
+	}
+}
 
-		service := &otpServiceImpl{repo: repo}
-		req := VerifyOTPRequest{UserID: "user-123", Code: "123456"}
+// TestGenerateOTP_WhitespaceOnlyTarget tests generating an OTP with whitespace-only target.
+func TestGenerateOTP_WhitespaceOnlyTarget(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
 
-		res, err := service.VerifyOTP(context.Background(), req)
+	_, err := svc.GenerateOTP(context.Background(), &model.GenerateOTPRequest{
+		Target: "   ",
+	})
+	if err == nil {
+		t.Fatal("expected error for whitespace-only target")
+	}
+}
 
-		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
-		}
-		if res == nil || !res.Valid {
-			t.Fatal("Expected OTP to be valid")
+// TestGenerateOTP_WhitespaceNormalization tests that target is trimmed.
+func TestGenerateOTP_WhitespaceNormalization(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+
+	mockRepo.EXPECT().
+		Save(ctx, gomock.Any()).
+		DoAndReturn(func(_ context.Context, otp *model.OTP) error {
+			if otp.Target != "081234567890" {
+				t.Errorf("expected trimmed target, got: %q", otp.Target)
+			}
+			return nil
+		})
+
+	resp, err := svc.GenerateOTP(ctx, &model.GenerateOTPRequest{
+		Target: "  081234567890  ",
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if resp.Status != "success" {
+		t.Errorf("expected success, got: %s", resp.Status)
+	}
+}
+
+// TestGenerateOTP_RepositoryError tests generating an OTP when repository Save fails.
+func TestGenerateOTP_RepositoryError(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	repoErr := errors.New("database connection failed")
+
+	mockRepo.EXPECT().
+		Save(ctx, gomock.Any()).
+		Return(repoErr)
+
+	_, err := svc.GenerateOTP(ctx, &model.GenerateOTPRequest{
+		Target: "081234567890",
+	})
+
+	if err == nil {
+		t.Fatal("expected error from repository")
+	}
+	if !errors.Is(err, repoErr) {
+		t.Fatalf("expected repo error, got: %v", err)
+	}
+}
+
+// TestGenerateOTP_EmailTarget tests generating an OTP with email target.
+func TestGenerateOTP_EmailTarget(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+
+	mockRepo.EXPECT().
+		Save(ctx, gomock.Any()).
+		DoAndReturn(func(_ context.Context, otp *model.OTP) error {
+			if otp.Target != "john@example.com" {
+				t.Errorf("expected email target, got: %s", otp.Target)
+			}
+			return nil
+		})
+
+	resp, err := svc.GenerateOTP(ctx, &model.GenerateOTPRequest{
+		Target: "john@example.com",
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if resp.Status != "success" {
+		t.Errorf("expected success, got: %s", resp.Status)
+	}
+}
+
+// ========================================
+// Test Cases: VerifyOTP
+// ========================================
+
+// TestVerifyOTP_Success tests verifying a valid OTP (correct code, not expired).
+// Expected: status "valid", OTP deleted after verification.
+func TestVerifyOTP_Success(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	otp := sampleOTP()
+
+	mockRepo.EXPECT().
+		GetByTarget(ctx, otp.Target).
+		Return(otp, nil)
+
+	// Expect Delete to be called (one-time use)
+	mockRepo.EXPECT().
+		Delete(ctx, otp.OTPID).
+		Return(nil)
+
+	resp, err := svc.VerifyOTP(ctx, &model.VerifyOTPRequest{
+		Target:  otp.Target,
+		OTPCode: otp.OTPCode,
+	})
+
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected response, got nil")
+	}
+	if resp.Status != "valid" {
+		t.Errorf("expected status 'valid', got: %s", resp.Status)
+	}
+	if resp.Message == "" {
+		t.Error("expected non-empty message")
+	}
+}
+
+// TestVerifyOTP_InvalidCode tests verifying with wrong OTP code.
+func TestVerifyOTP_InvalidCode(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	otp := sampleOTP()
+
+	mockRepo.EXPECT().
+		GetByTarget(ctx, otp.Target).
+		Return(otp, nil)
+
+	_, err := svc.VerifyOTP(ctx, &model.VerifyOTPRequest{
+		Target:  otp.Target,
+		OTPCode: "000000", // wrong code
+	})
+
+	if err != service.ErrOTPInvalid {
+		t.Fatalf("expected ErrOTPInvalid, got: %v", err)
+	}
+}
+
+// TestVerifyOTP_Expired tests verifying an expired OTP.
+func TestVerifyOTP_Expired(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	otp := expiredOTP()
+
+	mockRepo.EXPECT().
+		GetByTarget(ctx, otp.Target).
+		Return(otp, nil)
+
+	_, err := svc.VerifyOTP(ctx, &model.VerifyOTPRequest{
+		Target:  otp.Target,
+		OTPCode: otp.OTPCode, // correct code but expired
+	})
+
+	if err != service.ErrOTPExpired {
+		t.Fatalf("expected ErrOTPExpired, got: %v", err)
+	}
+}
+
+// TestVerifyOTP_NotFound tests verifying when no OTP exists for the target.
+func TestVerifyOTP_NotFound(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+
+	mockRepo.EXPECT().
+		GetByTarget(ctx, "unknown-target").
+		Return(nil, repository.ErrOTPNotFound)
+
+	_, err := svc.VerifyOTP(ctx, &model.VerifyOTPRequest{
+		Target:  "unknown-target",
+		OTPCode: "123456",
+	})
+
+	if err != service.ErrOTPNotFound {
+		t.Fatalf("expected ErrOTPNotFound, got: %v", err)
+	}
+}
+
+// TestVerifyOTP_NilRequest tests verifying with nil request.
+func TestVerifyOTP_NilRequest(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	_, err := svc.VerifyOTP(context.Background(), nil)
+	if err != service.ErrInvalidRequest {
+		t.Fatalf("expected ErrInvalidRequest, got: %v", err)
+	}
+}
+
+// TestVerifyOTP_EmptyTarget tests verifying with empty target.
+func TestVerifyOTP_EmptyTarget(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	_, err := svc.VerifyOTP(context.Background(), &model.VerifyOTPRequest{
+		Target:  "",
+		OTPCode: "123456",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty target")
+	}
+}
+
+// TestVerifyOTP_EmptyCode tests verifying with empty OTP code.
+func TestVerifyOTP_EmptyCode(t *testing.T) {
+	svc, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	_, err := svc.VerifyOTP(context.Background(), &model.VerifyOTPRequest{
+		Target:  "081234567890",
+		OTPCode: "",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty OTP code")
+	}
+}
+
+// TestVerifyOTP_WhitespaceNormalization tests that inputs are trimmed before verification.
+func TestVerifyOTP_WhitespaceNormalization(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	otp := sampleOTP()
+
+	// Mock expects the trimmed target
+	mockRepo.EXPECT().
+		GetByTarget(ctx, "081234567890").
+		Return(otp, nil)
+
+	mockRepo.EXPECT().
+		Delete(ctx, otp.OTPID).
+		Return(nil)
+
+	// Pass target and code with whitespace
+	resp, err := svc.VerifyOTP(ctx, &model.VerifyOTPRequest{
+		Target:  "  081234567890  ",
+		OTPCode: "  123456  ",
+	})
+
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if resp.Status != "valid" {
+		t.Errorf("expected valid, got: %s", resp.Status)
+	}
+}
+
+// TestVerifyOTP_RepositoryError tests verifying when GetByTarget fails.
+func TestVerifyOTP_RepositoryError(t *testing.T) {
+	svc, mockRepo, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	repoErr := errors.New("database timeout")
+
+	mockRepo.EXPECT().
+		GetByTarget(ctx, "081234567890").
+		Return(nil, repoErr)
+
+	_, err := svc.VerifyOTP(ctx, &model.VerifyOTPRequest{
+		Target:  "081234567890",
+		OTPCode: "123456",
+	})
+
+	if !errors.Is(err, repoErr) {
+		t.Fatalf("expected repo error, got: %v", err)
+	}
+}
+
+// ========================================
+// Test Cases: Model Validation
+// ========================================
+
+// TestGenerateOTPRequest_Validate tests the GenerateOTPRequest validation.
+func TestGenerateOTPRequest_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		req     model.GenerateOTPRequest
+		wantErr bool
+	}{
+		{
+			name:    "valid request",
+			req:     model.GenerateOTPRequest{Target: "081234567890"},
+			wantErr: false,
+		},
+		{
+			name:    "empty target",
+			req:     model.GenerateOTPRequest{Target: ""},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.req.Validate()
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestVerifyOTPRequest_Validate tests the VerifyOTPRequest validation.
+func TestVerifyOTPRequest_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		req     model.VerifyOTPRequest
+		wantErr bool
+	}{
+		{
+			name:    "valid request",
+			req:     model.VerifyOTPRequest{Target: "08123", OTPCode: "123456"},
+			wantErr: false,
+		},
+		{
+			name:    "empty target",
+			req:     model.VerifyOTPRequest{Target: "", OTPCode: "123456"},
+			wantErr: true,
+		},
+		{
+			name:    "empty otp_code",
+			req:     model.VerifyOTPRequest{Target: "08123", OTPCode: ""},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.req.Validate()
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestOTP_IsExpired tests the OTP expiration check.
+func TestOTP_IsExpired(t *testing.T) {
+	t.Run("not expired", func(t *testing.T) {
+		otp := sampleOTP()
+		if otp.IsExpired() {
+			t.Error("expected OTP to NOT be expired")
 		}
 	})
 
-	t.Run("Error - OTP tidak valid", func(t *testing.T) {
-		repo := &MockOTPRepository{
-			FindFunc: func(ctx context.Context, userID string) (*OTP, error) {
-				// Return OTP with different code
-				return &OTP{
-					UserID:    "user-123",
-					Code:      "654321",
-					ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
-				}, nil
-			},
-		}
-
-		service := &otpServiceImpl{repo: repo}
-		req := VerifyOTPRequest{UserID: "user-123", Code: "123456"}
-
-		res, err := service.VerifyOTP(context.Background(), req)
-
-		if err == nil {
-			t.Fatal("Expected error, got nil")
-		}
-		if err.Error() != "OTP tidak valid" {
-			t.Errorf("Expected 'OTP tidak valid' error, got %v", err)
-		}
-		if res != nil {
-			t.Errorf("Expected nil response, got %v", res)
-		}
-	})
-
-	t.Run("Error - OTP expired", func(t *testing.T) {
-		repo := &MockOTPRepository{
-			FindFunc: func(ctx context.Context, userID string) (*OTP, error) {
-				// Return expired OTP
-				return &OTP{
-					UserID:    "user-123",
-					Code:      "123456",
-					ExpiresAt: time.Now().Add(-5 * time.Minute).Unix(),
-				}, nil
-			},
-		}
-
-		service := &otpServiceImpl{repo: repo}
-		req := VerifyOTPRequest{UserID: "user-123", Code: "123456"}
-
-		res, err := service.VerifyOTP(context.Background(), req)
-
-		if err == nil {
-			t.Fatal("Expected error, got nil")
-		}
-		if err.Error() != "OTP expired" {
-			t.Errorf("Expected 'OTP expired' error, got %v", err)
-		}
-		if res != nil {
-			t.Errorf("Expected nil response, got %v", res)
+	t.Run("expired", func(t *testing.T) {
+		otp := expiredOTP()
+		if !otp.IsExpired() {
+			t.Error("expected OTP to be expired")
 		}
 	})
 }
