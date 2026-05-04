@@ -32,6 +32,10 @@ type NotifTemplate struct {
 
 // NotificationResponse represents the response when processing a notification.
 type NotificationResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
+	NotificationID string    `json:"notification_id"`
+	ReceiverID     string    `json:"receiver_id"`
+	Channel        string    `json:"channel"`
+	Status         string    `json:"status"`
+	Message        string    `json:"message"`
+	Timestamp      time.Time `json:"timestamp"`
 }

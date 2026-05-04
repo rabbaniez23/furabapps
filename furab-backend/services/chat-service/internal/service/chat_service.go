@@ -1,4 +1,3 @@
-// Package service implements the business logic for chat-service.
 package service
 
 import (
@@ -7,117 +6,135 @@ import (
 	"time"
 
 	"furab-backend/services/chat-service/internal/model"
-	"furab-backend/services/chat-service/internal/repository"
+	"github.com/google/uuid"
 )
 
-// NotificationClient defines the interface for calling Notification Service.
-type NotificationClient interface {
-	SendNotification(ctx context.Context, receiverID string, messagePreview string) error
+var (
+	ErrInvalidRequest   = errors.New("invalid request")
+	ErrInvalidSender    = errors.New("invalid sender")
+	ErrSessionClosed    = errors.New("chat session is closed")
+)
+
+// ChatRepository defines the interface for chat data access.
+type ChatRepository interface {
+	SaveMessage(ctx context.Context, msg *model.Message) error
+	UpdateMessageStatus(ctx context.Context, messageID string, status string) error
+	GetMessagesByOrderID(ctx context.Context, orderID string) ([]model.Message, error)
+	CloseSession(ctx context.Context, orderID string) error
 }
 
-// ChatService defines the interface for chat-service business logic.
+// UserServiceClient defines the interface for communicating with user-service.
+type UserServiceClient interface {
+	ValidateUser(ctx context.Context, userID string) (bool, error)
+}
+
+// DriverServiceClient defines the interface for communicating with driver-service.
+type DriverServiceClient interface {
+	ValidateDriver(ctx context.Context, driverID string) (bool, error)
+}
+
+// NotificationClient defines the interface for communicating with notification-service.
+type NotificationClient interface {
+	SendNotification(ctx context.Context, receiverID string, message string) error
+}
+
+// ChatService defines the interface for chat business logic.
 type ChatService interface {
 	SendMessage(ctx context.Context, req model.SendMessageRequest) (*model.SendMessageResponse, error)
-	UpdateReadStatus(ctx context.Context, req model.ReadReceiptRequest) error
+	UpdateMessageStatus(ctx context.Context, req model.ReadReceiptRequest) error
 	GetChatHistory(ctx context.Context, orderID string) ([]model.Message, error)
+	CloseChatSession(ctx context.Context, orderID string) error
 }
 
-// chatServiceImpl is the concrete implementation of ChatService.
 type chatServiceImpl struct {
-	repo        repository.ChatRepository
-	notifClient NotificationClient
+	repo         ChatRepository
+	userClient   UserServiceClient
+	driverClient DriverServiceClient
+	notifClient  NotificationClient
 }
 
 // NewChatService creates a new ChatService.
-func NewChatService(repo repository.ChatRepository, notifClient NotificationClient) ChatService {
+func NewChatService(
+	repo ChatRepository,
+	userClient UserServiceClient,
+	driverClient DriverServiceClient,
+	notifClient NotificationClient,
+) ChatService {
 	return &chatServiceImpl{
-		repo:        repo,
-		notifClient: notifClient,
+		repo:         repo,
+		userClient:   userClient,
+		driverClient: driverClient,
+		notifClient:  notifClient,
 	}
 }
 
-// =======================
-// SEND MESSAGE
-// =======================
 func (s *chatServiceImpl) SendMessage(ctx context.Context, req model.SendMessageRequest) (*model.SendMessageResponse, error) {
-
-	// ✅ Validasi input
-	if req.MessageText == "" {
-		return nil, errors.New("message cannot be empty")
+	if req.OrderID == "" || req.SenderID == "" || req.SenderType == "" || req.ReceiverID == "" || req.MessageText == "" {
+		return nil, ErrInvalidRequest
 	}
 
-	if req.SenderType != "user" && req.SenderType != "driver" {
-		return nil, errors.New("invalid sender type")
+	if req.SenderType == "user" {
+		valid, err := s.userClient.ValidateUser(ctx, req.SenderID)
+		if err != nil {
+			return nil, err
+		}
+		if !valid {
+			return nil, ErrInvalidSender
+		}
+	} else if req.SenderType == "driver" {
+		valid, err := s.driverClient.ValidateDriver(ctx, req.SenderID)
+		if err != nil {
+			return nil, err
+		}
+		if !valid {
+			return nil, ErrInvalidSender
+		}
+	} else {
+		return nil, ErrInvalidRequest
 	}
 
-	if req.ReceiverID == "" {
-		return nil, errors.New("receiver required")
+	now := time.Now().UTC()
+	msg := &model.Message{
+		MessageID:  uuid.New().String(),
+		OrderID:    req.OrderID,
+		SenderID:   req.SenderID,
+		Content:    req.MessageText,
+		Timestamp:  now,
+		ReadStatus: "sent",
 	}
 
-	// ✅ Validasi chat session
-	session, err := s.repo.GetChatSession(ctx, req.OrderID)
-	if err != nil {
-		return nil, err
-	}
-
-	if session == nil {
-		return nil, errors.New("chat session not found")
-	}
-
-	if session.ClosedAt != nil {
-		return nil, errors.New("chat session closed")
-	}
-
-	// ✅ Create message
-	msg := model.Message{
-		OrderID:   req.OrderID,
-		SenderID:  req.SenderID,
-		Content:   req.MessageText,
-		Timestamp: time.Now(),
-	}
-
-	// ✅ Save ke repository
 	if err := s.repo.SaveMessage(ctx, msg); err != nil {
 		return nil, err
 	}
 
-	// ✅ Trigger notification
 	if err := s.notifClient.SendNotification(ctx, req.ReceiverID, req.MessageText); err != nil {
 		return nil, err
 	}
 
-	// ✅ Response sukses
 	return &model.SendMessageResponse{
-		Status: "success",
+		MessageID:   msg.MessageID,
+		SenderID:    msg.SenderID,
+		MessageText: msg.Content,
+		Timestamp:   msg.Timestamp,
+		Status:      msg.ReadStatus,
 	}, nil
 }
 
-// =======================
-// UPDATE READ STATUS
-// =======================
-func (s *chatServiceImpl) UpdateReadStatus(ctx context.Context, req model.ReadReceiptRequest) error {
-
-	// ✅ Validasi status
-	if req.Status != "delivered" && req.Status != "read" {
-		return errors.New("invalid status")
+func (s *chatServiceImpl) UpdateMessageStatus(ctx context.Context, req model.ReadReceiptRequest) error {
+	if req.MessageID == "" || req.OrderID == "" || req.Status == "" {
+		return ErrInvalidRequest
 	}
 
-	// ✅ Update ke repository
-	err := s.repo.UpdateMessageStatus(ctx, req.MessageID, req.Status)
-	if err != nil {
-		return err
+	if req.Status != "sent" && req.Status != "delivered" && req.Status != "read" {
+		return ErrInvalidRequest
 	}
 
-	return nil
+	return s.repo.UpdateMessageStatus(ctx, req.MessageID, req.Status)
 }
 
-// =======================
-// GET CHAT HISTORY
-// =======================
 func (s *chatServiceImpl) GetChatHistory(ctx context.Context, orderID string) ([]model.Message, error) {
-
 	if orderID == "" {
-		return nil, errors.New("order id required")
+		return nil, ErrInvalidRequest
 	}
 
 	messages, err := s.repo.GetMessagesByOrderID(ctx, orderID)
@@ -125,5 +142,17 @@ func (s *chatServiceImpl) GetChatHistory(ctx context.Context, orderID string) ([
 		return nil, err
 	}
 
+	if messages == nil {
+		return []model.Message{}, nil
+	}
+
 	return messages, nil
+}
+
+func (s *chatServiceImpl) CloseChatSession(ctx context.Context, orderID string) error {
+	if orderID == "" {
+		return ErrInvalidRequest
+	}
+
+	return s.repo.CloseSession(ctx, orderID)
 }

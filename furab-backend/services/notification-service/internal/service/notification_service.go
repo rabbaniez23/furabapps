@@ -8,6 +8,8 @@ import (
 
 	"furab-backend/services/notification-service/internal/model"
 	"furab-backend/services/notification-service/internal/repository"
+
+	"github.com/google/uuid"
 )
 
 // EmailClient defines the interface for calling the Email Service.
@@ -17,7 +19,7 @@ type EmailClient interface {
 
 // NotificationService defines the interface for notification-service business logic.
 type NotificationService interface {
-	ProcessEventNotification(ctx context.Context, req model.EventNotificationRequest) (*model.NotificationResponse, error)
+	SendNotification(ctx context.Context, req model.EventNotificationRequest) (*model.NotificationResponse, error)
 	GenerateNotificationTemplate(ctx context.Context, eventType string) (*model.NotifTemplate, error)
 }
 
@@ -35,11 +37,19 @@ func NewNotificationService(repo repository.NotificationRepository, emailClient 
 	}
 }
 
-func (s *notificationServiceImpl) ProcessEventNotification(ctx context.Context, req model.EventNotificationRequest) (*model.NotificationResponse, error) {
+func (s *notificationServiceImpl) SendNotification(ctx context.Context, req model.EventNotificationRequest) (*model.NotificationResponse, error) {
 	if req.EventType == "" {
 		return nil, errors.New("event type is required")
 	}
-
+	if req.ReceiverID == "" {
+		return nil, errors.New("receiver_id is required")
+	}
+	if req.ReferenceID == "" {
+		return nil, errors.New("reference_id is required")
+	}
+	if req.Channel == "" {
+		return nil, errors.New("channel is required")
+	}
 	if req.Channel != "push" && req.Channel != "email" {
 		return nil, errors.New("invalid channel")
 	}
@@ -49,14 +59,18 @@ func (s *notificationServiceImpl) ProcessEventNotification(ctx context.Context, 
 		return nil, err
 	}
 
+	now := time.Now().UTC()
+	notifID := uuid.New().String()
+
 	log := model.NotificationLog{
-		ReceiverID:  req.ReceiverID,
-		Title:       template.TitleTemplate,
-		Message:     template.MessageTemplate,
-		Channel:     req.Channel,
-		ReferenceID: req.ReferenceID,
-		Timestamp:   time.Now(),
-		Status:      "sent",
+		NotificationID: notifID,
+		ReceiverID:     req.ReceiverID,
+		Title:          template.TitleTemplate,
+		Message:        template.MessageTemplate,
+		Channel:        req.Channel,
+		ReferenceID:    req.ReferenceID,
+		Timestamp:      now,
+		Status:         "sent",
 	}
 
 	if err := s.repo.SaveNotificationLog(ctx, log); err != nil {
@@ -65,13 +79,19 @@ func (s *notificationServiceImpl) ProcessEventNotification(ctx context.Context, 
 
 	if req.Channel == "email" {
 		if err := s.emailClient.SendEmail(ctx, req.ReceiverID, template.TitleTemplate, template.MessageTemplate); err != nil {
+			log.Status = "failed"
+			s.repo.SaveNotificationLog(ctx, log) // Update status
 			return nil, err
 		}
 	}
 
 	return &model.NotificationResponse{
-		Status:  "success",
-		Message: "notifikasi berhasil",
+		NotificationID: notifID,
+		ReceiverID:     req.ReceiverID,
+		Channel:        req.Channel,
+		Status:         "success",
+		Message:        "notifikasi berhasil",
+		Timestamp:      now,
 	}, nil
 }
 
