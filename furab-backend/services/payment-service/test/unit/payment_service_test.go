@@ -10,6 +10,8 @@ import (
 	"furab-backend/services/payment-service/internal/model"
 	"furab-backend/services/payment-service/internal/service"
 	"furab-backend/services/payment-service/test/unit/mock"
+
+	"go.uber.org/mock/gomock"
 )
 
 func newTestService(t *testing.T) (
@@ -19,17 +21,19 @@ func newTestService(t *testing.T) (
 	*mock.MockPromoClient,
 	*mock.MockWalletClient,
 	*mock.MockSettlementClient,
+	*gomock.Controller,
 ) {
 	t.Helper()
 
-	repo := mock.NewMockPaymentRepository()
-	pricing := &mock.MockPricingClient{Amount: 100000}
-	promo := &mock.MockPromoClient{FinalAmount: 80000}
-	wallet := &mock.MockWalletClient{}
-	settlement := &mock.MockSettlementClient{}
+	ctrl := gomock.NewController(t)
+	repo := mock.NewMockPaymentRepository(ctrl)
+	pricing := mock.NewMockPricingClient(ctrl)
+	promo := mock.NewMockPromoClient(ctrl)
+	wallet := mock.NewMockWalletClient(ctrl)
+	settlement := mock.NewMockSettlementClient(ctrl)
 
 	svc := service.NewPaymentService(repo, pricing, promo, wallet, settlement)
-	return svc, repo, pricing, promo, wallet, settlement
+	return svc, repo, pricing, promo, wallet, settlement, ctrl
 }
 
 func validInitiateRequest() *model.InitiatePaymentRequest {
@@ -44,9 +48,23 @@ func validInitiateRequest() *model.InitiatePaymentRequest {
 }
 
 func TestInitiatePayment_Success(t *testing.T) {
-	svc, _, pricing, promo, wallet, _ := newTestService(t)
+	svc, repo, pricing, promo, wallet, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
 
-	p, err := svc.InitiatePayment(context.Background(), validInitiateRequest())
+	ctx := context.Background()
+	req := validInitiateRequest()
+
+	repo.EXPECT().GetPaymentByIdempotencyKey(ctx, req.IdempotencyKey).Return(nil, nil)
+	pricing.EXPECT().GetTotalAmount(ctx, req.OrderID).Return(100000.0, nil)
+	promo.EXPECT().ApplyPromo(ctx, req.PromoCode, 100000.0).Return(80000.0, 20000.0, nil)
+
+	repo.EXPECT().CreatePayment(ctx, gomock.Any()).Return(nil)
+	repo.EXPECT().CreatePaymentLog(ctx, gomock.Any(), model.StatusPending).Return(nil)
+	wallet.EXPECT().LockBalance(ctx, req.UserID, 80000.0, gomock.Any()).Return(nil)
+	repo.EXPECT().UpdatePaymentStatus(ctx, gomock.Any(), model.StatusAuthorized).Return(nil)
+	repo.EXPECT().CreatePaymentLog(ctx, gomock.Any(), model.StatusAuthorized).Return(nil)
+
+	p, err := svc.InitiatePayment(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -62,13 +80,11 @@ func TestInitiatePayment_Success(t *testing.T) {
 	if p.TransactionReference != "TXN-ORD-100" {
 		t.Fatalf("expected transaction reference TXN-ORD-100, got %s", p.TransactionReference)
 	}
-	if pricing.Calls != 1 || promo.Calls != 1 || wallet.Locks != 1 {
-		t.Fatalf("orchestration call counts mismatch pricing=%d promo=%d lock=%d", pricing.Calls, promo.Calls, wallet.Locks)
-	}
 }
 
 func TestInitiatePayment_InvalidRequest(t *testing.T) {
-	svc, _, _, _, _, _ := newTestService(t)
+	svc, _, _, _, _, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
 
 	_, err := svc.InitiatePayment(context.Background(), &model.InitiatePaymentRequest{})
 	if err == nil {
@@ -77,7 +93,8 @@ func TestInitiatePayment_InvalidRequest(t *testing.T) {
 }
 
 func TestInitiatePayment_MissingPaymentMethod(t *testing.T) {
-	svc, _, _, _, _, _ := newTestService(t)
+	svc, _, _, _, _, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
 
 	_, err := svc.InitiatePayment(context.Background(), &model.InitiatePaymentRequest{OrderID: "ORD-ERR", UserID: "USR-ERR", PaymentDetail: "detail-only"})
 	if err == nil {
@@ -86,7 +103,8 @@ func TestInitiatePayment_MissingPaymentMethod(t *testing.T) {
 }
 
 func TestInitiatePayment_MissingPaymentDetail(t *testing.T) {
-	svc, _, _, _, _, _ := newTestService(t)
+	svc, _, _, _, _, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
 
 	_, err := svc.InitiatePayment(context.Background(), &model.InitiatePaymentRequest{OrderID: "ORD-ERR", UserID: "USR-ERR", PaymentMethod: "wallet"})
 	if err == nil {
@@ -96,9 +114,9 @@ func TestInitiatePayment_MissingPaymentDetail(t *testing.T) {
 
 func TestInitiatePayment_Idempotency(t *testing.T) {
 	ctx := context.Background()
-	svc, repo, _, _, wallet, _ := newTestService(t)
+	svc, repo, pricing, _, wallet, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
 
-	// First call - create payment
 	req := &model.InitiatePaymentRequest{
 		OrderID:        "ORD-IDEM",
 		UserID:         "USR-IDEM",
@@ -106,15 +124,25 @@ func TestInitiatePayment_Idempotency(t *testing.T) {
 		PaymentDetail:  "idem-detail",
 		IdempotencyKey: "unique-idem-key-123",
 	}
+
+	// First call expects full chain
+	repo.EXPECT().GetPaymentByIdempotencyKey(ctx, req.IdempotencyKey).Return(nil, nil)
+	pricing.EXPECT().GetTotalAmount(ctx, req.OrderID).Return(100000.0, nil)
+
+	repo.EXPECT().CreatePayment(ctx, gomock.Any()).Return(nil)
+	repo.EXPECT().CreatePaymentLog(ctx, gomock.Any(), model.StatusPending).Return(nil)
+	wallet.EXPECT().LockBalance(ctx, req.UserID, 100000.0, gomock.Any()).Return(nil)
+	repo.EXPECT().UpdatePaymentStatus(ctx, gomock.Any(), model.StatusAuthorized).Return(nil)
+	repo.EXPECT().CreatePaymentLog(ctx, gomock.Any(), model.StatusAuthorized).Return(nil)
+
 	first, err := svc.InitiatePayment(ctx, req)
 	if err != nil {
 		t.Fatalf("first initiate failed: %v", err)
 	}
 
-	initialWalletLocks := wallet.Locks
-	initialPaymentCount := len(repo.Payments)
+	// Second call expects just the idempotency key check
+	repo.EXPECT().GetPaymentByIdempotencyKey(ctx, req.IdempotencyKey).Return(first, nil)
 
-	// Second call with same idempotency key - should return same payment WITHOUT calling wallet service again
 	second, err := svc.InitiatePayment(ctx, req)
 	if err != nil {
 		t.Fatalf("second initiate failed: %v", err)
@@ -125,37 +153,42 @@ func TestInitiatePayment_Idempotency(t *testing.T) {
 		t.Fatalf("idempotency key should return same payment: first=%s, second=%s", first.ID, second.ID)
 	}
 
-	// Verify no duplicate payment was created
-	if len(repo.Payments) != initialPaymentCount {
-		t.Fatalf("expected no new payment created on second call: before=%d, after=%d", initialPaymentCount, len(repo.Payments))
-	}
-
-	// Verify wallet.LockBalance was NOT called again (idempotency should skip it)
-	// Should remain at initialWalletLocks, not increase to initialWalletLocks+1
-	if wallet.Locks != initialWalletLocks {
-		t.Fatalf("idempotency should NOT call wallet lock again: expected %d, got %d", initialWalletLocks, wallet.Locks)
-	}
-
-	// Verify payment data is consistent
 	if second.PaymentStatus != model.StatusAuthorized || second.FinalAmount == 0 {
 		t.Fatalf("expected authorized payment with valid amount, got status=%s amount=%f", second.PaymentStatus, second.FinalAmount)
 	}
 
-	// Verify transaction reference and other details are preserved
 	if second.TransactionReference != first.TransactionReference {
 		t.Fatalf("transaction reference should be same for idempotent calls: first=%s, second=%s", first.TransactionReference, second.TransactionReference)
 	}
 }
 
-
 func TestCapturePayment_Success(t *testing.T) {
 	ctx := context.Background()
-	svc, repo, _, _, wallet, settlement := newTestService(t)
+	svc, repo, pricing, _, wallet, settlement, ctrl := newTestService(t)
+	defer ctrl.Finish()
 
-	p, err := svc.InitiatePayment(ctx, &model.InitiatePaymentRequest{OrderID: "ORD-CAP", UserID: "USR-CAP", PaymentMethod: "wallet", PaymentDetail: "cap-detail", IdempotencyKey: "idem-cap"})
+	req := &model.InitiatePaymentRequest{OrderID: "ORD-CAP", UserID: "USR-CAP", PaymentMethod: "wallet", PaymentDetail: "cap-detail", IdempotencyKey: "idem-cap"}
+
+	// Initiate Phase Expectations
+	repo.EXPECT().GetPaymentByIdempotencyKey(ctx, req.IdempotencyKey).Return(nil, nil)
+	pricing.EXPECT().GetTotalAmount(ctx, req.OrderID).Return(100000.0, nil)
+	repo.EXPECT().CreatePayment(ctx, gomock.Any()).Return(nil)
+	repo.EXPECT().CreatePaymentLog(ctx, gomock.Any(), model.StatusPending).Return(nil)
+	wallet.EXPECT().LockBalance(ctx, req.UserID, 100000.0, gomock.Any()).Return(nil)
+	repo.EXPECT().UpdatePaymentStatus(ctx, gomock.Any(), model.StatusAuthorized).Return(nil)
+	repo.EXPECT().CreatePaymentLog(ctx, gomock.Any(), model.StatusAuthorized).Return(nil)
+
+	p, err := svc.InitiatePayment(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected initiate error: %v", err)
 	}
+
+	// Capture Phase Expectations
+	repo.EXPECT().GetPaymentByID(ctx, p.ID).Return(p, nil)
+	wallet.EXPECT().DeductBalance(ctx, p.UserID, p.FinalAmount, gomock.Any()).Return(nil)
+	repo.EXPECT().UpdatePaymentStatus(ctx, p.ID, model.StatusCaptured).Return(nil)
+	repo.EXPECT().CreatePaymentLog(ctx, p.ID, model.StatusCaptured).Return(nil)
+	settlement.EXPECT().TriggerSettlement(ctx, p.ID, p.OrderID, p.FinalAmount).Return(nil)
 
 	got, err := svc.CapturePayment(ctx, p.ID)
 	if err != nil {
@@ -164,21 +197,14 @@ func TestCapturePayment_Success(t *testing.T) {
 	if got.PaymentStatus != model.StatusCaptured {
 		t.Fatalf("expected captured status, got %s", got.PaymentStatus)
 	}
-	if wallet.Deducts != 1 {
-		t.Fatalf("expected wallet deduct once, got %d", wallet.Deducts)
-	}
-	if settlement.Calls != 1 {
-		t.Fatalf("expected settlement call once, got %d", settlement.Calls)
-	}
-	if repo.LastUpdatedID != p.ID {
-		t.Fatalf("expected repo update for payment %s, got %s", p.ID, repo.LastUpdatedID)
-	}
 }
 
 func TestCapturePayment_InvalidState(t *testing.T) {
 	ctx := context.Background()
-	svc, repo, _, _, _, _ := newTestService(t)
-	repo.Payments["PAY-1"] = &model.Payment{ID: "PAY-1", PaymentStatus: model.StatusPending}
+	svc, repo, _, _, _, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	repo.EXPECT().GetPaymentByID(ctx, "PAY-1").Return(&model.Payment{ID: "PAY-1", PaymentStatus: model.StatusPending}, nil)
 
 	_, err := svc.CapturePayment(ctx, "PAY-1")
 	if err == nil {
@@ -188,12 +214,30 @@ func TestCapturePayment_InvalidState(t *testing.T) {
 
 func TestCancelPayment_Success(t *testing.T) {
 	ctx := context.Background()
-	svc, _, _, _, wallet, _ := newTestService(t)
+	svc, repo, pricing, _, wallet, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
 
-	p, err := svc.InitiatePayment(ctx, &model.InitiatePaymentRequest{OrderID: "ORD-CAN", UserID: "USR-CAN", PaymentMethod: "wallet", PaymentDetail: "cancel-detail", IdempotencyKey: "idem-can"})
+	req := &model.InitiatePaymentRequest{OrderID: "ORD-CAN", UserID: "USR-CAN", PaymentMethod: "wallet", PaymentDetail: "cancel-detail", IdempotencyKey: "idem-can"}
+
+	// Initiate Phase
+	repo.EXPECT().GetPaymentByIdempotencyKey(ctx, req.IdempotencyKey).Return(nil, nil)
+	pricing.EXPECT().GetTotalAmount(ctx, req.OrderID).Return(100000.0, nil)
+	repo.EXPECT().CreatePayment(ctx, gomock.Any()).Return(nil)
+	repo.EXPECT().CreatePaymentLog(ctx, gomock.Any(), model.StatusPending).Return(nil)
+	wallet.EXPECT().LockBalance(ctx, req.UserID, 100000.0, gomock.Any()).Return(nil)
+	repo.EXPECT().UpdatePaymentStatus(ctx, gomock.Any(), model.StatusAuthorized).Return(nil)
+	repo.EXPECT().CreatePaymentLog(ctx, gomock.Any(), model.StatusAuthorized).Return(nil)
+
+	p, err := svc.InitiatePayment(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected initiate error: %v", err)
 	}
+
+	// Cancel Phase
+	repo.EXPECT().GetPaymentByID(ctx, p.ID).Return(p, nil)
+	wallet.EXPECT().UnlockBalance(ctx, p.UserID, p.FinalAmount, gomock.Any()).Return(nil)
+	repo.EXPECT().UpdatePaymentStatus(ctx, p.ID, model.StatusCancelled).Return(nil)
+	repo.EXPECT().CreatePaymentLog(ctx, p.ID, model.StatusCancelled).Return(nil)
 
 	got, err := svc.CancelPayment(ctx, p.ID)
 	if err != nil {
@@ -202,15 +246,14 @@ func TestCancelPayment_Success(t *testing.T) {
 	if got.PaymentStatus != model.StatusCancelled {
 		t.Fatalf("expected cancelled status, got %s", got.PaymentStatus)
 	}
-	if wallet.Unlocks != 1 {
-		t.Fatalf("expected wallet unlock once, got %d", wallet.Unlocks)
-	}
 }
 
 func TestCancelPayment_InvalidState(t *testing.T) {
 	ctx := context.Background()
-	svc, repo, _, _, _, _ := newTestService(t)
-	repo.Payments["PAY-2"] = &model.Payment{ID: "PAY-2", PaymentStatus: model.StatusCaptured}
+	svc, repo, _, _, _, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	repo.EXPECT().GetPaymentByID(ctx, "PAY-2").Return(&model.Payment{ID: "PAY-2", PaymentStatus: model.StatusCaptured}, nil)
 
 	_, err := svc.CancelPayment(ctx, "PAY-2")
 	if err == nil {
@@ -220,16 +263,42 @@ func TestCancelPayment_InvalidState(t *testing.T) {
 
 func TestRefundPayment_Success(t *testing.T) {
 	ctx := context.Background()
-	svc, _, _, _, wallet, _ := newTestService(t)
+	svc, repo, pricing, _, wallet, settlement, ctrl := newTestService(t)
+	defer ctrl.Finish()
 
-	p, err := svc.InitiatePayment(ctx, &model.InitiatePaymentRequest{OrderID: "ORD-REF", UserID: "USR-REF", PaymentMethod: "wallet", PaymentDetail: "refund-detail", IdempotencyKey: "idem-ref"})
+	req := &model.InitiatePaymentRequest{OrderID: "ORD-REF", UserID: "USR-REF", PaymentMethod: "wallet", PaymentDetail: "refund-detail", IdempotencyKey: "idem-ref"}
+
+	// Initiate Phase
+	repo.EXPECT().GetPaymentByIdempotencyKey(ctx, req.IdempotencyKey).Return(nil, nil)
+	pricing.EXPECT().GetTotalAmount(ctx, req.OrderID).Return(100000.0, nil)
+	repo.EXPECT().CreatePayment(ctx, gomock.Any()).Return(nil)
+	repo.EXPECT().CreatePaymentLog(ctx, gomock.Any(), model.StatusPending).Return(nil)
+	wallet.EXPECT().LockBalance(ctx, req.UserID, 100000.0, gomock.Any()).Return(nil)
+	repo.EXPECT().UpdatePaymentStatus(ctx, gomock.Any(), model.StatusAuthorized).Return(nil)
+	repo.EXPECT().CreatePaymentLog(ctx, gomock.Any(), model.StatusAuthorized).Return(nil)
+
+	p, err := svc.InitiatePayment(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected initiate error: %v", err)
 	}
+
+	// Capture Phase
+	repo.EXPECT().GetPaymentByID(ctx, p.ID).Return(p, nil)
+	wallet.EXPECT().DeductBalance(ctx, p.UserID, p.FinalAmount, gomock.Any()).Return(nil)
+	repo.EXPECT().UpdatePaymentStatus(ctx, p.ID, model.StatusCaptured).Return(nil)
+	repo.EXPECT().CreatePaymentLog(ctx, p.ID, model.StatusCaptured).Return(nil)
+	settlement.EXPECT().TriggerSettlement(ctx, p.ID, p.OrderID, p.FinalAmount).Return(nil)
+
 	_, err = svc.CapturePayment(ctx, p.ID)
 	if err != nil {
 		t.Fatalf("unexpected capture error: %v", err)
 	}
+
+	// Refund Phase
+	repo.EXPECT().GetPaymentByID(ctx, p.ID).Return(p, nil)
+	wallet.EXPECT().CreditBalance(ctx, p.UserID, p.FinalAmount, gomock.Any()).Return(nil)
+	repo.EXPECT().UpdatePaymentStatus(ctx, p.ID, model.StatusRefunded).Return(nil)
+	repo.EXPECT().CreatePaymentLog(ctx, p.ID, model.StatusRefunded).Return(nil)
 
 	refunded, err := svc.RefundPayment(ctx, p.ID)
 	if err != nil {
@@ -238,15 +307,14 @@ func TestRefundPayment_Success(t *testing.T) {
 	if refunded.PaymentStatus != model.StatusRefunded {
 		t.Fatalf("expected refunded, got %s", refunded.PaymentStatus)
 	}
-	if wallet.Credits != 1 {
-		t.Fatalf("expected wallet credit once, got %d", wallet.Credits)
-	}
 }
 
 func TestRefundPayment_InvalidState(t *testing.T) {
 	ctx := context.Background()
-	svc, repo, _, _, _, _ := newTestService(t)
-	repo.Payments["PAY-REF-ERR"] = &model.Payment{ID: "PAY-REF-ERR", PaymentStatus: model.StatusAuthorized}
+	svc, repo, _, _, _, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	repo.EXPECT().GetPaymentByID(ctx, "PAY-REF-ERR").Return(&model.Payment{ID: "PAY-REF-ERR", PaymentStatus: model.StatusAuthorized}, nil)
 
 	_, err := svc.RefundPayment(ctx, "PAY-REF-ERR")
 	if err == nil {
@@ -255,8 +323,10 @@ func TestRefundPayment_InvalidState(t *testing.T) {
 }
 
 func TestGetPayment_Success(t *testing.T) {
-	svc, repo, _, _, _, _ := newTestService(t)
-	repo.Payments["PAY-GET"] = &model.Payment{ID: "PAY-GET", PaymentStatus: model.StatusAuthorized}
+	svc, repo, _, _, _, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	repo.EXPECT().GetPaymentByID(context.Background(), "PAY-GET").Return(&model.Payment{ID: "PAY-GET", PaymentStatus: model.StatusAuthorized}, nil)
 
 	payment, err := svc.GetPayment(context.Background(), "PAY-GET")
 	if err != nil {
@@ -268,7 +338,10 @@ func TestGetPayment_Success(t *testing.T) {
 }
 
 func TestGetPayment_NotFound(t *testing.T) {
-	svc, _, _, _, _, _ := newTestService(t)
+	svc, repo, _, _, _, _, ctrl := newTestService(t)
+	defer ctrl.Finish()
+
+	repo.EXPECT().GetPaymentByID(context.Background(), "missing").Return(nil, nil)
 
 	_, err := svc.GetPayment(context.Background(), "missing")
 	if err == nil {
