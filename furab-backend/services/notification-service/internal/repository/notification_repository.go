@@ -1,22 +1,16 @@
 // Package repository provides data access layer for notification-service.
 package repository
 
-import "context"
+import (
+	"context"
+
+	"furab-backend/services/notification-service/internal/model"
+)
 
 // NotificationRepository defines the interface for notification-service data access.
 type NotificationRepository interface {
-
-	// Send performs the Send operation.
-	Send(ctx context.Context) error
-
-	// GetAll performs the GetAll operation.
-	GetAll(ctx context.Context) error
-
-	// MarkAsRead performs the MarkAsRead operation.
-	MarkAsRead(ctx context.Context) error
-
-	// GetUnreadCount performs the GetUnreadCount operation.
-	GetUnreadCount(ctx context.Context) error
+	SaveNotificationLog(ctx context.Context, log model.NotificationLog) error
+	GetTemplateByEventType(ctx context.Context, eventType string) (*model.NotifTemplate, error)
 }
 
 // postgresNotificationRepository implements NotificationRepository using PostgreSQL.
@@ -27,4 +21,12 @@ type postgresNotificationRepository struct {
 // NewPostgresNotificationRepository creates a new PostgreSQL-based repository.
 func NewPostgresNotificationRepository() NotificationRepository {
 	return &postgresNotificationRepository{}
+}
+
+func (r *postgresNotificationRepository) SaveNotificationLog(ctx context.Context, log model.NotificationLog) error {
+	return nil
+}
+
+func (r *postgresNotificationRepository) GetTemplateByEventType(ctx context.Context, eventType string) (*model.NotifTemplate, error) {
+	return nil, nil
 }

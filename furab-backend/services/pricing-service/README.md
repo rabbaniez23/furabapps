@@ -1,19 +1,74 @@
-﻿# Pricing Service -join ' ')
+﻿# Pricing Service
 
-Dynamic pricing and surge pricing service
+Pricing Service adalah microservice yang bertanggung jawab untuk melakukan kalkulasi total biaya pesanan secara akurat. Perhitungan mencakup komponen biaya seperti harga item, biaya layanan (*service fee*), dan biaya pengiriman (*delivery fee*).
 
-## Deskripsi
+## 1. Deskripsi
 
-TODO: Tambahkan deskripsi lengkap service ini.
+Pricing Service bersifat stateless dan hanya melakukan kalkulasi real-time berdasarkan data pesanan dan aturan harga yang tersedia. Hasilnya digunakan sebagai dasar bagi Promo Service dan Payment Service untuk menghitung total harga akhir.
 
-## Tech Stack
+## 2. Spesifikasi Input & Output
 
-| Komponen | Teknologi |
-|----------|-----------|
-| Language | Go 1.22+ |
-| HTTP Router | chi |
-| Database | PostgreSQL |
-| Testing | gomock, go test |
+### Input (Request)
+
+| Fitur | Field |
+| :--- | :--- |
+| **Hitung Harga** | `order_id` |
+
+### Output (Response)
+
+| Fitur | Field |
+| :--- | :--- |
+| **Total Harga** | `total_amount` |
+| **Rincian Harga** | `item_price`, `delivery_fee`, `service_fee` |
+
+## 3. Struktur Data (Skema Tabel)
+
+### Tabel `pricing_rules`
+
+Menyimpan aturan dan parameter perhitungan biaya.
+
+- `rule_id`: Primary Key.
+- `type`: Jenis biaya (`delivery`, `service`, `tax`).
+- `value`: Nilai atau besaran biaya (flat atau persentase).
+- `description`: Penjelasan mengenai aturan biaya tersebut.
+
+## 4. State & Logika Bisnis
+
+- **Stateless Logic:** Pricing Service tidak menyimpan status transaksi.
+- **Fast Response:** Dirancang untuk merespons dengan cepat agar alur transaksi tetap lancar.
+- **Perhitungan:** total harga dihitung sebagai `item_price + delivery_fee + service_fee`.
+
+## 5. Interaksi dengan Microservice Lain
+
+- **Order Service:** mengambil data detail item pesanan.
+- **Location Service:** mendapatkan informasi jarak tempuh untuk menghitung biaya pengiriman.
+- **Promo Service:** menggunakan `total_amount` sebagai dasar perhitungan diskon.
+- **Payment Service:** menggunakan total harga akhir untuk proses pembayaran.
+
+## 6. API Endpoint
+
+### GET /api/v1/prices/{orderID}
+
+Request:
+
+```bash
+curl http://localhost:8080/api/v1/prices/order-123
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "order_id": "order-123",
+    "total_amount": 81650,
+    "item_price": 53000,
+    "delivery_fee": 26000,
+    "service_fee": 2650
+  }
+}
+```
 
 ## Struktur Folder
 
@@ -21,10 +76,13 @@ TODO: Tambahkan deskripsi lengkap service ini.
 pricing-service/
 +-- cmd/main.go
 +-- internal/
+    +-- client/
+        +-- location_client.go
+        +-- order_client.go
     +-- handler/price_handler.go
-    +-- service/price_service.go
-    +-- repository/price_repository.go
     +-- model/price.go
+    +-- repository/price_repository.go
+    +-- service/price_service.go
 +-- test/
     +-- unit/price_service_test.go
     +-- unit/mock/
@@ -46,31 +104,19 @@ export DB_PASSWORD=furab_secret
 export DB_NAME=pricing-service
 
 # Jalankan service
+cd services/pricing-service
 go run cmd/main.go
 ```
 
 ## Menjalankan Tests
 
-### Unit Tests (Tanpa Database)
+### Unit Tests
 ```bash
 go test ./test/unit/... -v
 ```
 
-**Test BERHASIL jika output:**
-```
---- PASS: TestNewPriceService_Creation
-PASS
-```
-
-**Test GAGAL jika output:**
-```
---- FAIL: TestNewPriceService_Creation
-FAIL
-```
-
 ### Functional Tests (Dengan Database)
 ```bash
-# Pastikan PostgreSQL berjalan
 go test ./test/functional/... -v -tags=functional
 ```
 
