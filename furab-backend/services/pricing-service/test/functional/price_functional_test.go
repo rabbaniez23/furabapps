@@ -35,9 +35,30 @@ func TestMain(m *testing.M) {
 	dbPassword := getEnvOrDefault("DB_PASSWORD", "furab_secret")
 	dbName := getEnvOrDefault("DB_NAME", "pricing_service")
 
+	// Step 1: Auto-create database
+	adminDSN := fmt.Sprintf("postgres://%s:%s@%s:%s/postgres?sslmode=disable",
+		dbUser, dbPassword, dbHost, dbPort)
+	adminDB, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		log.Printf("functional tests skipped: failed to connect admin database: %v", err)
+		os.Exit(0)
+	}
+	for i := 0; i < 30; i++ {
+		if err = adminDB.Ping(); err == nil {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if err != nil {
+		log.Printf("functional tests skipped: database not ready: %v", err)
+		os.Exit(0)
+	}
+	_, _ = adminDB.Exec("CREATE DATABASE " + dbName)
+	adminDB.Close()
+
+	// Step 2: Connect to target database
 	dsn := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", dbUser, dbPassword, dbHost, dbPort, dbName)
 
-	var err error
 	testDB, err = sql.Open("pgx", dsn)
 	if err != nil {
 		log.Printf("functional tests skipped: failed to connect database: %v", err)

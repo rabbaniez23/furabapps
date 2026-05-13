@@ -42,7 +42,7 @@ func (s *stubDriverClient) ValidateDriver(ctx context.Context, driverID string) 
 
 // TestMain sets up the Redis connection, runs tests, and cleans up.
 func TestMain(m *testing.M) {
-	redisHost := getEnvOrDefault("REDIS_HOST", "localhost")
+	redisHost := getEnvOrDefault("REDIS_HOST", "127.0.0.1")
 	redisPort := getEnvOrDefault("REDIS_PORT", "6379")
 	redisPassword := getEnvOrDefault("REDIS_PASSWORD", "")
 

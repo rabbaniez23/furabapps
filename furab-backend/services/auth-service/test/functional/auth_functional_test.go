@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,19 +97,37 @@ func (s *realTokenGenerator) ValidateToken(token string) (bool, error) {
 // ---------------------------------------------------------
 
 func TestMain(m *testing.M) {
-	dsn := "postgres://postgres:postgres@localhost:5432/auth_test?sslmode=disable"
+	adminConn := "host=127.0.0.1 port=5432 user=furab password=furab_secret dbname=postgres sslmode=disable"
 	if envDsn := os.Getenv("TEST_DB_DSN"); envDsn != "" {
-		dsn = envDsn
+		adminConn = envDsn
 	}
 
-	var err error
-	testDB, err = sql.Open("postgres", dsn)
+	adminDB, err := sql.Open("postgres", adminConn)
+	if err != nil {
+		log.Fatalf("Could not connect to admin database: %v", err)
+	}
+	for i := 0; i < 30; i++ {
+		if err = adminDB.Ping(); err == nil {
+			break
+		}
+		log.Printf("Waiting for database... attempt %d/30: %v", i+1, err)
+		time.Sleep(1 * time.Second)
+	}
+	if err != nil {
+		log.Fatalf("Could not connect to database after 30 attempts: %v", err)
+	}
+	_, err = adminDB.Exec("CREATE DATABASE auth_test")
+	if err != nil && !strings.Contains(err.Error(), "already exists") {
+		log.Fatalf("Failed to create database: %v", err)
+	}
+	adminDB.Close()
+
+	connStr := "host=127.0.0.1 port=5432 user=furab password=furab_secret dbname=auth_test sslmode=disable"
+	testDB, err = sql.Open("postgres", connStr)
 	if err != nil {
 		log.Fatalf("Could not connect to database: %v", err)
 	}
-
-	// Wait and retry connection (max 5 seconds)
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 30; i++ {
 		if err = testDB.Ping(); err == nil {
 			break
 		}

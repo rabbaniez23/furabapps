@@ -132,29 +132,46 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	dbHost := getEnvOrDefault("DB_HOST", "localhost")
+	dbHost := getEnvOrDefault("DB_HOST", "127.0.0.1")
 	dbPort := getEnvOrDefault("DB_PORT", "5432")
 	dbUser := getEnvOrDefault("DB_USER", "furab")
 	dbPassword := getEnvOrDefault("DB_PASSWORD", "furab_secret")
 	dbName := getEnvOrDefault("DB_NAME", "emergency_service")
 
+	// Step 1: Auto-create database
+	adminDSN := fmt.Sprintf("postgres://%s:%s@%s:%s/postgres?sslmode=disable",
+		dbUser, dbPassword, dbHost, dbPort)
+	adminDB, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		log.Fatalf("Failed to connect to admin database: %v", err)
+	}
+	for i := 0; i < 30; i++ {
+		if err = adminDB.Ping(); err == nil {
+			break
+		}
+		log.Printf("Waiting for database... (%d/30)", i+1)
+		time.Sleep(1 * time.Second)
+	}
+	if err != nil {
+		log.Fatalf("Database is not ready: %v", err)
+	}
+	_, _ = adminDB.Exec("CREATE DATABASE " + dbName)
+	adminDB.Close()
+
+	// Step 2: Connect to target database
 	dsn := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		dbUser, dbPassword, dbHost, dbPort, dbName)
 
-	var err error
 	testDB, err = sql.Open("pgx", dsn)
 	if err != nil {
 		log.Fatalf("Failed to connect to test database: %v", err)
 	}
 	defer testDB.Close()
 
-	// Wait for DB to be ready (max 30 seconds)
 	for i := 0; i < 30; i++ {
-		err = testDB.Ping()
-		if err == nil {
+		if err = testDB.Ping(); err == nil {
 			break
 		}
-		log.Printf("Waiting for database... (%d/30)", i+1)
 		time.Sleep(1 * time.Second)
 	}
 	if err != nil {

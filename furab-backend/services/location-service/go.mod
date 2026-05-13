@@ -1,6 +1,6 @@
 module furab-backend/services/location-service
 
-go 1.24
+go 1.24.0
 
 require (
 	furab-backend/shared v0.0.0
