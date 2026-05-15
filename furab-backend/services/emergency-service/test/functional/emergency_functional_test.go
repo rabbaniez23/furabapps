@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"furab-backend/services/emergency-service/internal/model"
-	"furab-backend/services/emergency-service/internal/repository"
 	"furab-backend/services/emergency-service/internal/service"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
