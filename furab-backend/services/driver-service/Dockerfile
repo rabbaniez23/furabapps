@@ -1,5 +1,5 @@
-﻿# Build stage
-FROM golang:1.22-alpine AS builder
+# Build stage
+FROM golang:alpine AS builder
 WORKDIR /app
 COPY shared/ ./shared/
 COPY services/driver-service/ ./services/driver-service/
