@@ -9,7 +9,7 @@
 // Prerequisites:
 //   - Docker Desktop running
 //   - Run: docker compose -f deploy/docker/docker-compose.yml up -d redis
-//   - Redis available on localhost:6379
+//   - Redis available on 127.0.0.1:6379
 package functional
 
 import (

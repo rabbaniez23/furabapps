@@ -39,7 +39,7 @@ func getEnvOrDefault(key, defaultValue string) string {
 // TestMain sets up the test database connection, creates schema, runs tests, and cleans up.
 func TestMain(m *testing.M) {
 	// Standard DSN pattern used in ride-order-service tests
-	dbHost := getEnvOrDefault("DB_HOST", "localhost")
+	dbHost := getEnvOrDefault("DB_HOST", "127.0.0.1")
 	dbPort := getEnvOrDefault("DB_PORT", "5432")
 	dbUser := getEnvOrDefault("DB_USER", "furab")
 	dbPassword := getEnvOrDefault("DB_PASSWORD", "furab_secret")

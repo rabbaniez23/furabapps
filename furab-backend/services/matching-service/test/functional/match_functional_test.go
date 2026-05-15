@@ -35,7 +35,7 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	dbHost := getEnvOrDefault("DB_HOST", "localhost")
+	dbHost := getEnvOrDefault("DB_HOST", "127.0.0.1")
 	dbPort := getEnvOrDefault("DB_PORT", "5432")
 	dbUser := getEnvOrDefault("DB_USER", "furab")
 	dbPassword := getEnvOrDefault("DB_PASSWORD", "furab_secret")
