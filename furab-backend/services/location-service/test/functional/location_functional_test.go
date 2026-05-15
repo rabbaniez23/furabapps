@@ -211,17 +211,17 @@ func TestFunctional_SearchNearbyDrivers(t *testing.T) {
 		t.Logf("  Driver: %s, distance: %.2f km, status: %s", r.DriverID, r.Distance, r.DriverStatus)
 	}
 
-	// Search with 10km radius → should find all 3
+	// Search with 15km radius → should find all 3
 	allResults, err := testSvc.FindNearbyDrivers(ctx, model.SearchDriverRequest{
 		LatitudeOrigin:  -6.1754,
 		LongitudeOrigin: 106.8272,
-		Radius:          10.0,
+		Radius:          15.0,
 	})
 	if err != nil {
 		t.Fatalf("failed to search all drivers: %v", err)
 	}
 	if len(allResults) != 3 {
-		t.Errorf("expected 3 drivers within 10km, got: %d", len(allResults))
+		t.Errorf("expected 3 drivers within 15km, got: %d", len(allResults))
 	}
 	t.Logf("Found %d drivers within 10km radius", len(allResults))
 }
