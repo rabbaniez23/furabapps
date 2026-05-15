@@ -20,6 +20,7 @@ pipeline {
         stage('Unit Tests') {
             steps {
                 powershell '''
+                    Set-Location furab-backend
                     Write-Host "Running unit tests..."
                     $services = Get-ChildItem -Path services -Directory
                     foreach ($s in $services) {
@@ -42,6 +43,7 @@ pipeline {
         stage('Lint/Vet') {
             steps {
                 powershell '''
+                    Set-Location furab-backend
                     Write-Host "Running go vet..."
                     $services = Get-ChildItem -Path services -Directory
                     foreach ($s in $services) {
@@ -58,6 +60,7 @@ pipeline {
         stage('Build Image') {
             steps {
                 powershell '''
+                    Set-Location furab-backend
                     Write-Host "Building Docker images..."
                     $services = Get-ChildItem -Path services -Directory
                     foreach ($s in $services) {
@@ -72,6 +75,7 @@ pipeline {
         stage('Functional Tests') {
             steps {
                 powershell '''
+                    Set-Location furab-backend
                     Write-Host "Starting test infrastructure..."
                     docker compose -f deploy/docker/docker-compose.yml up -d postgres kafka rabbitmq redis
 
@@ -91,7 +95,7 @@ pipeline {
             }
             post {
                 always {
-                    powershell 'docker compose -f deploy/docker/docker-compose.yml down'
+                    powershell 'Set-Location furab-backend; docker compose -f deploy/docker/docker-compose.yml down'
                 }
             }
         }
@@ -103,6 +107,7 @@ pipeline {
             }
             steps {
                 powershell '''
+                    Set-Location furab-backend
                     Write-Host "Pushing Docker images..."
                     $services = Get-ChildItem -Path services -Directory
                     foreach ($s in $services) {
@@ -121,6 +126,7 @@ pipeline {
             }
             steps {
                 powershell '''
+                    Set-Location furab-backend
                     Write-Host "Deploying to Kubernetes..."
                     kubectl apply -f deploy/kubernetes/namespace.yaml
 
