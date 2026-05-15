@@ -12,28 +12,28 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-                sh 'echo "Checked out branch: ${GIT_BRANCH}"'
+                powershell 'Write-Host "Checked out branch: $env:GIT_BRANCH"'
             }
         }
 
         // Stage 2: Unit Tests (no DB, no external services)
         stage('Unit Tests') {
             steps {
-                sh '''
-                    echo "Running unit tests..."
-                    for dir in services/*/; do
-                        service=$(basename "$dir")
-                        echo "=== Unit Testing: $service ==="
-                        cd "$dir"
-                        go test ./test/unit/... -v -cover -coverprofile=coverage.out 2>&1
-                        cd ../..
-                    done
+                powershell '''
+                    Write-Host "Running unit tests..."
+                    $services = Get-ChildItem -Path services -Directory
+                    foreach ($s in $services) {
+                        Write-Host "=== Unit Testing: $($s.Name) ==="
+                        Set-Location $s.FullName
+                        go test ./test/unit/... -v -cover -coverprofile=coverage.out
+                        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                        Set-Location ../..
+                    }
                 '''
             }
             post {
                 always {
-                    // Publish test results
-                    sh 'echo "Unit test results published"'
+                    powershell 'Write-Host "Unit test results published"'
                 }
             }
         }
@@ -41,18 +41,15 @@ pipeline {
         // Stage 3: Lint & Vet (static analysis)
         stage('Lint/Vet') {
             steps {
-                sh '''
-                    echo "Running go vet..."
-                    for dir in services/*/; do
-                        service=$(basename "$dir")
-                        echo "=== Vetting: $service ==="
-                        cd "$dir"
-                        go vet ./... 2>&1 || true
-                        cd ../..
-                    done
-
-                    echo "Running golangci-lint..."
-                    # golangci-lint run ./... || true
+                powershell '''
+                    Write-Host "Running go vet..."
+                    $services = Get-ChildItem -Path services -Directory
+                    foreach ($s in $services) {
+                        Write-Host "=== Vetting: $($s.Name) ==="
+                        Set-Location $s.FullName
+                        go vet ./...
+                        Set-Location ../..
+                    }
                 '''
             }
         }
@@ -60,15 +57,13 @@ pipeline {
         // Stage 4: Build Docker Images (local)
         stage('Build Image') {
             steps {
-                sh '''
-                    echo "Building Docker images..."
-                    for dir in services/*/; do
-                        service=$(basename "$dir")
-                        echo "=== Building: $service ==="
-                        docker build -t ${DOCKER_REGISTRY}/${service}:${BUILD_NUMBER} \
-                            -t ${DOCKER_REGISTRY}/${service}:latest \
-                            -f "$dir/Dockerfile" . || true
-                    done
+                powershell '''
+                    Write-Host "Building Docker images..."
+                    $services = Get-ChildItem -Path services -Directory
+                    foreach ($s in $services) {
+                        Write-Host "=== Building: $($s.Name) ==="
+                        docker build -t "$env:DOCKER_REGISTRY/$($s.Name):$env:BUILD_NUMBER" -t "$env:DOCKER_REGISTRY/$($s.Name):latest" -f "$($s.FullName)/Dockerfile" .
+                    }
                 '''
             }
         }
@@ -76,29 +71,27 @@ pipeline {
         // Stage 5: Functional Tests (requires DB and infrastructure)
         stage('Functional Tests') {
             steps {
-                sh '''
-                    echo "Starting test infrastructure..."
-                    docker-compose -f deploy/docker/docker-compose.yml up -d postgres kafka rabbitmq redis
+                powershell '''
+                    Write-Host "Starting test infrastructure..."
+                    docker compose -f deploy/docker/docker-compose.yml up -d postgres kafka rabbitmq redis
 
-                    echo "Waiting for services to be ready..."
-                    sleep 15
+                    Write-Host "Waiting for services to be ready..."
+                    Start-Sleep -Seconds 15
 
-                    echo "Running functional tests..."
-                    for dir in services/*/; do
-                        service=$(basename "$dir")
-                        echo "=== Functional Testing: $service ==="
-                        cd "$dir"
-                        go test ./test/functional/... -v -tags=functional 2>&1
-                        cd ../..
-                    done
-
-                    echo "Running cross-service e2e tests..."
-                    go test ./tests/functional/... -v -tags=functional 2>&1 || true
+                    Write-Host "Running functional tests..."
+                    $services = Get-ChildItem -Path services -Directory
+                    foreach ($s in $services) {
+                        Write-Host "=== Functional Testing: $($s.Name) ==="
+                        Set-Location $s.FullName
+                        go test ./test/functional/... -v -tags=functional
+                        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                        Set-Location ../..
+                    }
                 '''
             }
             post {
                 always {
-                    sh 'docker-compose -f deploy/docker/docker-compose.yml down'
+                    powershell 'docker compose -f deploy/docker/docker-compose.yml down'
                 }
             }
         }
@@ -109,14 +102,14 @@ pipeline {
                 branch 'main'
             }
             steps {
-                sh '''
-                    echo "Pushing Docker images..."
-                    for dir in services/*/; do
-                        service=$(basename "$dir")
-                        echo "=== Pushing: $service ==="
-                        docker push ${DOCKER_REGISTRY}/${service}:${BUILD_NUMBER} || true
-                        docker push ${DOCKER_REGISTRY}/${service}:latest || true
-                    done
+                powershell '''
+                    Write-Host "Pushing Docker images..."
+                    $services = Get-ChildItem -Path services -Directory
+                    foreach ($s in $services) {
+                        Write-Host "=== Pushing: $($s.Name) ==="
+                        docker push "$env:DOCKER_REGISTRY/$($s.Name):$env:BUILD_NUMBER"
+                        docker push "$env:DOCKER_REGISTRY/$($s.Name):latest"
+                    }
                 '''
             }
         }
@@ -127,15 +120,11 @@ pipeline {
                 branch 'main'
             }
             steps {
-                sh '''
-                    echo "Deploying to Kubernetes..."
+                powershell '''
+                    Write-Host "Deploying to Kubernetes..."
                     kubectl apply -f deploy/kubernetes/namespace.yaml
 
-                    # Using Helm for deployment
-                    helm upgrade --install furab deploy/helm/furab-chart/ \
-                        --namespace ${KUBE_NAMESPACE} \
-                        --set image.tag=${BUILD_NUMBER} \
-                        --wait --timeout 300s || true
+                    helm upgrade --install furab deploy/helm/furab-chart/ --namespace $env:KUBE_NAMESPACE --set image.tag=$env:BUILD_NUMBER --wait --timeout 300s
                 '''
             }
         }
@@ -146,23 +135,16 @@ pipeline {
                 branch 'main'
             }
             steps {
-                sh '''
-                    echo "Verifying deployment..."
-                    sleep 10
+                powershell '''
+                    Write-Host "Verifying deployment..."
+                    Start-Sleep -Seconds 10
 
-                    # Health check for each service
-                    SERVICES="auth-service otp-service user-service driver-service \
-                              ride-order-service food-order-service cart-service matching-service \
-                              payment-service wallet-service settlement-service pricing-service \
-                              promo-service location-service chat-service notification-service \
-                              email-service emergency-service merchant-service menu-service \
-                              rating-service review-service audit-log-service"
+                    $services = @("auth-service", "otp-service", "user-service", "driver-service", "ride-order-service", "food-order-service", "cart-service", "matching-service", "payment-service", "wallet-service", "settlement-service", "pricing-service", "promo-service", "location-service", "chat-service", "notification-service", "email-service", "emergency-service", "merchant-service", "menu-service", "rating-service", "review-service", "audit-log-service")
 
-                    for service in $SERVICES; do
-                        echo "=== Checking: $service ==="
-                        kubectl rollout status deployment/$service \
-                            -n ${KUBE_NAMESPACE} --timeout=120s || true
-                    done
+                    foreach ($s in $services) {
+                        Write-Host "=== Checking: $s ==="
+                        kubectl rollout status deployment/$s -n $env:KUBE_NAMESPACE --timeout=120s
+                    }
                 '''
             }
         }
