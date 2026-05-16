@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"furab-backend/services/promo-service/internal/model"
-	"furab-backend/services/promo-service/internal/repository"
 	"furab-backend/services/promo-service/internal/service"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
