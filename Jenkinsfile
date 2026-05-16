@@ -77,10 +77,23 @@ pipeline {
             steps {
                 powershell '''
                     Set-Location furab-backend
-                    Write-Host "Starting test infrastructure..."
-                    docker compose -f deploy/docker/docker-compose.yml up -d postgres kafka rabbitmq redis
-
-                    Write-Host "Waiting for services to be ready..."
+                    Write-Host "Starting test infrastructure sequentially to prevent Docker crash..."
+                    Write-Host "Starting Postgres..."
+                    docker compose -f deploy/docker/docker-compose.yml up -d postgres
+                    Start-Sleep -Seconds 5
+                    
+                    Write-Host "Starting Redis..."
+                    docker compose -f deploy/docker/docker-compose.yml up -d redis
+                    Start-Sleep -Seconds 5
+                    
+                    Write-Host "Starting RabbitMQ..."
+                    docker compose -f deploy/docker/docker-compose.yml up -d rabbitmq
+                    Start-Sleep -Seconds 5
+                    
+                    Write-Host "Starting Kafka (and Zookeeper)..."
+                    docker compose -f deploy/docker/docker-compose.yml up -d kafka
+                    
+                    Write-Host "Waiting for all services to be fully ready..."
                     Start-Sleep -Seconds 15
 
                     Write-Host "Running functional tests..."
