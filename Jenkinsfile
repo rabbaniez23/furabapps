@@ -66,6 +66,7 @@ pipeline {
                     foreach ($s in $services) {
                         Write-Host "=== Building: $($s.Name) ==="
                         docker build -t "$env:DOCKER_REGISTRY/$($s.Name):$env:BUILD_NUMBER" -t "$env:DOCKER_REGISTRY/$($s.Name):latest" -f "$($s.FullName)/Dockerfile" .
+                        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
                     }
                 '''
             }
