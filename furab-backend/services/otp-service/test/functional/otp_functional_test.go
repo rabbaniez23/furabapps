@@ -148,13 +148,11 @@ func TestFunctional_OTPLifecycle(t *testing.T) {
 	}
 
 	// 2. Verify OTP with wrong code
-	respVer, err := testSvc.VerifyOTP(ctx, &model.VerifyOTPRequest{Target: target, OTPCode: "000000"})
-	if err != nil {
-		t.Fatalf("VerifyOTP with wrong code failed with error: %v", err)
+	_, err = testSvc.VerifyOTP(ctx, &model.VerifyOTPRequest{Target: target, OTPCode: "000000"})
+	if err == nil {
+		t.Fatalf("Expected error for wrong OTP code, but got nil")
 	}
-	if respVer.Status == "valid" {
-		t.Error("Expected invalid for wrong OTP code")
-	}
+	t.Logf("Correctly got error for wrong OTP code: %v", err)
 
 	// Verify DB record still exists after wrong attempt
 	var count int
